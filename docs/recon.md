@@ -66,14 +66,13 @@ Account: `ava1.ring.account.REDACTED`
 
 `GET https://api.amazonvision.com/v1/devices` returned:
 
-| Name       | Device ID                                                                                                           | Role (unconfirmed) |
-| ---------- | ------------------------------------------------------------------------------------------------------------------- | ------------------ |
-| Front Door | `ava1.ring.device.FRONT_DOOR` | doorbell           |
-| Ring Cam 1 | `ava1.ring.device.RING_CAM_1` | outdoor cam        |
+| Name       | Device ID                                                                                                           | Role        |
+| ---------- | ------------------------------------------------------------------------------------------------------------------- | ----------- |
+| Front Door | `ava1.ring.device.FRONT_DOOR` | doorbell    |
+| Ring Cam 1 | `ava1.ring.device.RING_CAM_1` | outdoor cam |
 
 `listDevices` in `src/ring.ts` keeps only `id` and `attributes.name`, so other device attributes
-(model, kind) were not inspected. The role column is inferred from the names and needs Matthew to
-confirm.
+(model, kind) were not inspected. Roles confirmed by Matthew on 2026-10-06.
 
 ## Service state
 
