@@ -288,6 +288,7 @@ export function createApp(cfg: Config) {
         case 'GET /link': {
           const nonce = url.searchParams.get('nonce') ?? '';
           const time = url.searchParams.get('time') ?? '';
+          log(`link: GET received, params=[${[...url.searchParams.keys()].join(',')}]`);
           if (!NONCE_RE.test(nonce) || !/^\d{10,16}$/.test(time)) {
             return send(
               res,
@@ -317,6 +318,7 @@ export function createApp(cfg: Config) {
           );
         }
         default:
+          log(`unmatched: ${req.method} ${url.pathname}`);
           return send(res, 404, '{"error":"not found"}');
       }
     } catch (e) {
