@@ -1,0 +1,44 @@
+{
+  "entities": [
+    {
+      "entity_id": "light.front_spotlight",
+      "placement": "exterior",
+      "zones": ["front"],
+      "services": {
+        "turn_on": { "params": { "brightness_pct": { "min": 50, "max": 100 } } },
+        "turn_off": {}
+      }
+    },
+    {
+      "entity_id": "media_player.porch_speaker",
+      "placement": "exterior",
+      "zones": ["front"],
+      "services": {
+        "play_media": {
+          "params": {
+            "media_content_id": { "enum": ["media-source://media_source/local/bark-5s.mp3"] },
+            "media_content_type": { "enum": ["music"] }
+          }
+        },
+        "volume_set": { "params": { "volume_level": { "min": 0.1, "max": 0.6 } } },
+        "media_stop": {}
+      }
+    },
+    {
+      "entity_id": "light.living_room",
+      "placement": "interior",
+      "zones": [],
+      "services": { "turn_on": {}, "turn_off": {} }
+    },
+    {
+      "entity_id": "media_player.living_room_tv",
+      "placement": "interior",
+      "zones": [],
+      "services": {
+        "volume_mute": { "params": { "is_volume_muted": { "enum": [true] } } },
+        "turn_on": {},
+        "turn_off": {}
+      }
+    }
+  ]
+}

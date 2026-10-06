@@ -74,6 +74,40 @@ Account: `ava1.ring.account.REDACTED`
 `listDevices` in `src/ring.ts` keeps only `id` and `attributes.name`, so other device attributes
 (model, kind) were not inspected. Roles confirmed by Matthew on 2026-10-06.
 
+## Gate checks run 2026-10-06 16:50 CDT
+
+### Stored image download (step 1c "frame timestamp provenance")
+
+`POST /v1/devices/{id}/media/image/download` with `type: latest_in_range`, then GET the 303
+`Location`. Requests ran 16:50:29 to 16:50:43.
+
+- **Verified:** a 24 h window is refused at step 1 with
+  `403 TIME_RANGE_NOT_AUTHORIZED` ("Requested time range is not within authorized boundaries").
+  This code is not in api-documentation.html. A window starting 16:31:35 is accepted, so access
+  appears to start around link time; the exact boundary was not bisected.
+- **Verified:** Ring Cam 1 returned `200 image/jpeg`, 60021 bytes, 640x360, in about 620 ms
+  end to end, with `X-Media-Timestamp: 1791322351595` (16:32:31 CDT) and
+  `X-Media-Origin: snapshot`. The frame was 1091 s old, so a stored snapshot is not a live
+  frame; the 5 s freshness rule will reject this kind of result.
+- **Verified:** Front Door returned `416 MEDIA_NOT_FOUND` for the window since link: no media
+  recorded there yet.
+- Every image carries a Ring watermark (device ID suffix, "Partner: Quiet Porch", generation
+  time).
+
+### Bedrock vision (step 1c "Bedrock vision")
+
+- **Verified:** Converse API with bearer auth (`AWS_BEARER_TOKEN_BEDROCK`), region `us-east-1`,
+  model `global.anthropic.claude-sonnet-4-6`, on the Ring Cam 1 frame: `200` in 2428 ms,
+  378 input and 69 output tokens.
+- **Verified:** output was the requested perception JSON with a matching `evidence_id`
+  (`person_present: false`, `confidence: 0.93`), but wrapped in a json code fence despite
+  "ONLY a JSON object". The client must strip fences before parsing.
+
+### Still open in the step 1c gate
+
+Signed `motion_detected` webhook, live-stream frame (WHEP/RTSPS), forced-expiry refresh, HA
+`quiet-porch` user, exterior actuators.
+
 ## Service state
 
 - `quiet-porch.service` (systemd --user) enabled at boot on 2026-10-06; linger is on.

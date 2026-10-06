@@ -1,0 +1,122 @@
+import { describe, expect, it } from 'vitest';
+import {
+  checkAction,
+  classOf,
+  loadAllowlist,
+  parseAllowlist,
+  type Allowlist,
+  type EntityRule,
+} from '../src/allowlist.ts';
+
+const example = loadAllowlist(
+  new URL('../config/allowlist.example.json', import.meta.url).pathname,
+);
+
+function entity(overrides: Record<string, unknown>) {
+  return {
+    entity_id: 'light.porch',
+    placement: 'exterior',
+    zones: ['front'],
+    services: { turn_on: {}, turn_off: {} },
+    ...overrides,
+  };
+}
+
+describe('allowlist load-time rules', () => {
+  it('loads the example config', () => {
+    expect(example.entities.size).toBe(4);
+  });
+  it('rejects lock, cover and alarm entities even if listed', () => {
+    for (const id of ['lock.front_door', 'cover.garage_door', 'alarm_control_panel.home']) {
+      expect(() => parseAllowlist({ entities: [entity({ entity_id: id })] })).toThrow(
+        /never allowed/,
+      );
+    }
+  });
+  it('requires a safety service on every entity', () => {
+    expect(() => parseAllowlist({ entities: [entity({ services: { turn_on: {} } })] })).toThrow(
+      /safety service/,
+    );
+  });
+  it('rejects audio services on an interior media player', () => {
+    const tv = entity({
+      entity_id: 'media_player.tv',
+      placement: 'interior',
+      zones: [],
+      services: { play_media: {}, turn_off: {} },
+    });
+    expect(() => parseAllowlist({ entities: [tv] })).toThrow(/interior media player/);
+  });
+  it('rejects an exterior entity with no zone, a duplicate, and a malformed param rule', () => {
+    expect(() => parseAllowlist({ entities: [entity({ zones: [] })] })).toThrow(/zone/);
+    expect(() => parseAllowlist({ entities: [entity({}), entity({})] })).toThrow(/duplicate/);
+    const bad = entity({ services: { turn_on: { params: { brightness_pct: {} } }, turn_off: {} } });
+    expect(() => parseAllowlist({ entities: [bad] })).toThrow(/min,max/);
+  });
+});
+
+describe('checkAction', () => {
+  it('allows a bounded escalation and classifies it', () => {
+    expect(
+      checkAction(example, {
+        entity_id: 'light.front_spotlight',
+        service: 'turn_on',
+        data: { brightness_pct: 80 },
+      }),
+    ).toEqual({ ok: true, cls: 'escalation' });
+  });
+  it('classifies off/stop as safety', () => {
+    expect(
+      checkAction(example, { entity_id: 'light.front_spotlight', service: 'turn_off' }),
+    ).toEqual({
+      ok: true,
+      cls: 'safety',
+    });
+    expect(classOf('media_stop')).toBe('safety');
+    expect(classOf('turn_on')).toBe('escalation');
+  });
+  it('rejects out-of-range, non-numeric, unknown and off-enum parameters', () => {
+    const spot = { entity_id: 'light.front_spotlight', service: 'turn_on' };
+    expect(checkAction(example, { ...spot, data: { brightness_pct: 101 } }).ok).toBe(false);
+    expect(checkAction(example, { ...spot, data: { brightness_pct: '80' } }).ok).toBe(false);
+    expect(checkAction(example, { ...spot, data: { flash: 'long' } }).ok).toBe(false);
+    const speaker = { entity_id: 'media_player.porch_speaker', service: 'play_media' };
+    expect(
+      checkAction(example, { ...speaker, data: { media_content_id: 'http://evil/siren.mp3' } }).ok,
+    ).toBe(false);
+  });
+  it('rejects entities and services not listed, and forbidden domains', () => {
+    expect(checkAction(example, { entity_id: 'light.garage', service: 'turn_on' }).ok).toBe(false);
+    expect(checkAction(example, { entity_id: 'light.front_spotlight', service: 'toggle' }).ok).toBe(
+      false,
+    );
+    expect(checkAction(example, { entity_id: 'lock.front_door', service: 'unlock' })).toEqual({
+      ok: false,
+      reason: 'domain lock forbidden',
+    });
+  });
+  it('keeps the interior TV silent: mute only to true, no audio services', () => {
+    const tv = { entity_id: 'media_player.living_room_tv' };
+    expect(
+      checkAction(example, { ...tv, service: 'volume_mute', data: { is_volume_muted: true } }).ok,
+    ).toBe(true);
+    expect(
+      checkAction(example, { ...tv, service: 'volume_mute', data: { is_volume_muted: false } }).ok,
+    ).toBe(false);
+    expect(checkAction(example, { ...tv, service: 'play_media' }).ok).toBe(false);
+    expect(checkAction(example, { ...tv, service: 'volume_up' }).ok).toBe(false);
+  });
+  it('denies interior audio at check time even if a rule slipped past the loader', () => {
+    const tv: EntityRule = {
+      entity_id: 'media_player.den_tv',
+      placement: 'interior',
+      zones: [],
+      services: { play_media: {}, turn_off: {} },
+    };
+    const handBuilt: Allowlist = { entities: new Map([[tv.entity_id, tv]]) };
+    expect(checkAction(handBuilt, { entity_id: tv.entity_id, service: 'play_media' })).toEqual({
+      ok: false,
+      reason: 'play_media denied on interior media player',
+    });
+  });
+});
