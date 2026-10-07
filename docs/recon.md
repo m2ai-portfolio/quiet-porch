@@ -223,3 +223,47 @@ mode `away`. Real Bedrock, the live `judgeFrame` path.
 - `ring-door-empty` saw a "small figure" at 0.72 and was logged as `person_uncertain`.
 - Not covered yet: a real night IR armadillo from our camera, real night people, multi-frame
   dwell sequences (step 3).
+
+## 2026-10-07 evening: live dry run, other_motion timing, step 3 status
+
+### other_motion timing (gate: "Event frame ready within 5 s")
+
+- Ring Cam 1 (`front_yard`) sent its first `other_motion` webhooks today (21:06Z and 21:32Z),
+  so Other Motion alerts appear to be on. `grep -o '"sub_type":"[a-z_]*"'
+  webhook-events.jsonl | sort | uniq -c` at 21:33Z: human 48, motion 25, other_motion 2.
+- Both arrived late: `received_after_event_ms` 10724 and 11211. Ring classifies before it
+  sends.
+- The recording was not downloadable until 10 to 15 s after receipt (follow-up probe: 416 at
+  +5 s and +10 s, 200 recording at +15 s), so about 21 to 26 s after the event.
+- `human` and `motion` are fast: frames ready 1.8 s to 6.3 s after the event, decisions at 8 to
+  12 s (21:07Z and 21:38Z).
+- Consequence: the event-frame retries now run to +20 s after receipt (`5405cdb`), so an
+  other_motion frame is fetched and judged. But the 15 s evidence-age rule then rejects any
+  intruder or wildlife decision on it as `stale_evidence`. **As built, the wildlife profile cannot
+  fire on an other_motion event.** The fix is a policy change, so it waits for Matthew.
+
+### Step 3 (coordinator + adapters, dry run): built 10-07
+
+Built and tested:
+- Schema v3 (`e402ee9`).
+- Ladder and action plans (`ladder.ts`).
+- Coordinator (`coordinator.ts`): guards, write-ahead intents, cleanup, reconcile, boot sweep,
+  preemption, and cooldowns.
+- Adapters (`actuators.ts`): a dry-run simulator plus HA REST, pi_audio and Telegram.
+- Signed single-use Stop route, and the Pi scripts (`scripts/pi/qp-*`).
+
+Live state: deployed (`aac2eb5`) in dry run, max intruder level 1, and no interior lights
+configured. Every actuator call is a `would_call` in `coordinator.jsonl`. 159 tests pass. A
+mutation sweep over the 8 escalation and cleanup guards fails at least one test for each.
+
+Not built yet (each one is named in plan v7):
+- HA WebSocket `state_changed` watcher for late-command attribution. Null-context reconcile rows
+  get only the periodic off and read-back, and only an owner can clear them.
+- The sensor disagreement rule. Covering sensors are unconfirmed, so all zones are Ring-only.
+- The follow-up frame loop during an incident. The ladder only sees webhook frames, which is why
+  it is capped at L1.
+- An owner-clear route for reconcile rows. The function exists; status-mcp (step 4) will expose
+  it.
+- The race test where qp-play is paused after its epoch check while qp-stop runs. Only the
+  stop-first and older-epoch cases are tested.
+- `qp-*` and the clips are not installed on the Pi; that waits for the hardware gate.
