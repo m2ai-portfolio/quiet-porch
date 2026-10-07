@@ -28,7 +28,8 @@ Quiet Porch dies. Deliver it as a Devpost entry for the Amazon Developer Hackath
 A recorded night run shows a real Ring event of the armadillo producing a logged Bedrock
 "armadillo" verdict, the valve opening and closing on its own within 30 s (HA history), the
 clip playing, interior lights on, and a Telegram message with a working Stop link; the decision
-log over the same period shows zero actions on every human, vehicle and pet event; and Devpost
+log over the same period shows zero actions on every benign event (family, deliveries,
+vehicles, pets), and the plan v7 intruder ladder is demonstrated on a staged loiterer; and Devpost
 shows the entry as Submitted before 2026-10-23 12:00 PT.
 
 ## Action
@@ -45,8 +46,11 @@ then attended live runs, then unattended.
 
 ## Decisions (Matthew, 2026-10-07)
 
-- Armadillo only. The human-intruder escalation from plan v6 is dropped; humans never trigger
-  an actuator.
+- ~~Armadillo only. The human-intruder escalation from plan v6 is dropped; humans never trigger
+  an actuator.~~ Superseded the same day by Matthew: "We shouldn't be removing the original
+  functionality of what this system was designed to do. The armadillo is just a test scenario,
+  not the only thing it can do." The v6 intruder ladder stays; the armadillo is the test
+  scenario for a new wildlife profile (plan v7).
 - Speaker plays a Rick Roll clip outdoors (armadillos are unlikely to care about sound; it is
   for the demo).
 - Sprinkler run capped at 30 s.

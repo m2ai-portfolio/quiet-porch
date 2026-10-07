@@ -1,203 +1,310 @@
-# Plan v7: Quiet Porch armadillo deterrent
+# Plan v7: Quiet Porch, AI home deterrent (intruder ladder + nuisance wildlife)
 
 Supersedes plan v6 (`~/.claude/checkmate/runs/2026-09-27-1021-ai-home-deterrent-v5/plan-v2.md`).
-Goal card: `docs/goal.md` (Q-20261007-0001). Written 2026-10-07 15:20 CDT.
+Goal card: `docs/goal.md` (Q-20261007-0001). Revised 2026-10-07 after Matthew's correction:
+"We shouldn't be removing the original functionality of what this system was designed to do.
+The armadillo is just a test scenario, not the only thing it can do."
 
 ## Goal
 
-A Ring motion event at night is checked by Bedrock on the frame from the event's own moment. Only
-a confirmed armadillo opens the sprinkler valve covering that camera for at most 30 s, turns on
-chosen interior lights, plays a short clip on the outdoor speaker, and sends Matthew a Telegram
-message with the frame and a Stop link. Everything else (people, vehicles, deliveries, pets,
-uncertain frames) is logged and causes zero actions. Shipped as a Devpost entry by
-2026-10-20 (hard stop 2026-10-23 12:00 PT).
+Ship a working, demo-recorded Devpost entry by 2026-10-20 (hard stop 2026-10-23 12:00 PT) in
+which a Ring motion event is perceived by AI on the frame from the event's own moment, benign
+events cause zero actions, and two response profiles run on the same pipeline:
 
-## What changed from v6
+1. **Intruder profile (v6, kept):** a persistent unknown person at the perimeter triggers a
+   bounded, non-harmful, exterior-only escalation ladder while the interior stays silent, with
+   an owner stand-down at every level and a calm voice status report afterward.
+2. **Nuisance wildlife profile (new):** a confirmed armadillo (or another configured species)
+   at night triggers a 30 s sprinkler run, chosen interior lights, a short clip on the outdoor
+   speaker, and a Telegram message with the frame and a Stop link.
 
-v6 was a person-intruder escalation ladder. Matthew's 2026-10-07 decisions make it armadillo
-only, so these v6 parts are dropped:
-
-- the L0 to L4 ladder, dwell timing, and the 20/40/60 s escalation;
-- the separate critique agent, the Strands action picker, and the context store;
-- secondary-sensor disagreement (Wyze, Aqara);
-- the TV, the spotlight, and the dog bark;
-- live-stream (WHEP/RTSPS) frames: event-time stored frames are now proven (below).
-
-Kept from v6: signed webhooks, evidence binding, the allowlist, the write-ahead action log, the
-valve's own duration limit, and the trust-ladder rollout.
+The armadillo is the live test scenario for profile 2. A staged loiterer is the test scenario
+for profile 1.
 
 ## Verified facts (this session or `docs/recon.md`)
 
-- Signed `motion_detected` webhooks: 72+ received, 0 rejected. Payload attributes are exactly
+- Ring: signed `motion_detected` webhooks, 72+ received, 0 rejected. Attributes are exactly
   `source`, `source_type`, `timestamp`, `sub_type`. Ring Cam 1 sent only `human`; Front Door
-  only `motion` (Smart Alerts off there).
+  only `motion` (Smart Alerts off there). Token refresh at 75% of lifetime works.
 - `at_timestamp` at the event time returns the event's own frame (`X-Media-Origin: recording`).
   First live probe (2026-10-07 15:17, Ring Cam 1): `200` on the first request, frame 0 ms from
-  the event, usable 1.94 s after the event. One sample; the probe keeps logging to
-  `frame-probe.jsonl`.
-- Bedrock Converse (`global.anthropic.claude-sonnet-4-6`, bearer auth) reads a day frame in
-  about 2.4 s and returns JSON inside a code fence; `parseModelJson` handles that.
-- HA at `HASS_URL` answers with `HASS_TOKEN` (231 entities). `valve.front_yard_sprinkler_valve`,
-  `valve.backyard_sprinkler_valve` and their `number.*_irrigation_duration` (0 to 86400 s) exist
-  but are `unavailable`, as are all 15 lights and most sockets (Tuya link broken). HA has no
-  media player for the Anker speaker.
-- Anker speaker on rpi-claw: bonded, default PipeWire sink, auto-reconnects
-  (`anker-reconnect.service`), `pw-play` works over SSH from ProBook.
-- Telegram bot tokens and chat ids exist in `~/.env.shared` (`TELEGRAM_BOT_TOKEN`,
-  `TELEGRAM_ATTENTION_CHAT_ID`, others). Which one to use is Matthew's call.
-- Repo: `src/allowlist.ts`, `src/bedrock.ts`, `src/db.ts` scaffold with 54 passing tests.
+  the event, usable 1.94 s after the event. One sample; `frame-probe.jsonl` keeps logging.
+  `latest_in_range` returns the END of the window, and an old snapshot can come back
+  (1091 s old on 10-06), so it is not used for freshness.
+- Bedrock Converse (`global.anthropic.claude-sonnet-4-6`, bearer auth): day frame in about
+  2.4 s; JSON comes inside a code fence and `parseModelJson` handles it.
+- Home Assistant 2026.9.4 at `HASS_URL` answers with `HASS_TOKEN` (231 entities). The
+  `mcp_server` integration is NOT loaded. Integrations include `tuya` and `alexa_devices`.
+- HA actuators, all Tuya and all currently `unavailable` (Tuya link broken):
+  `valve.front_yard_sprinkler_valve`, `valve.backyard_sprinkler_valve`,
+  `number.*_irrigation_duration` (0 to 86400 s), 14 lights, `switch.patio_light_socket_1`,
+  `switch.back_patio_socket_1/2`.
+- HA sensors: `binary_sensor.motion_sensor_1b3a_motion` (battery 20%) and
+  `binary_sensor.motion_sensor_4c16_motion` (battery 0%), placement unknown. The Aqara hub M2
+  and its `binary_sensor.motion_sensor` are `unavailable`. Aqara FP2/P1 appear only as
+  `button.*` Alexa routine triggers, not as presence sensors. No Wyze entity exists.
+- HA media players: Echo devices (interior) and TV/receiver. None for the outdoor Anker.
+- Anker outdoor speaker on rpi-claw: bonded, default PipeWire sink, auto-reconnects after a Pi
+  reboot and a speaker power-cycle (`anker-reconnect.service`), `pw-play` over SSH works.
+- Telegram bot tokens and chat ids exist in `~/.env.shared`.
+- Repo `~/projects/quiet-porch`: `allowlist.ts` (forbidden lock/cover/alarm domains, safety vs
+  escalation class from the service name, interior audio deny), `db.ts` (events, evidence,
+  one-active-incident index, cooldowns, write-ahead `action_intents`, `reconcile`),
+  `bedrock.ts`, `ring.ts` with `downloadImageAt`, frame probe live. 54 tests pass.
 
-## Pipeline
+## Architecture (TypeScript, Node 22, repo `quiet-porch`)
 
 ```
-Ring webhook (signed)
-  -> events table (unique source_event_id)
-  -> triage gate:  sub_type human | vehicle | package_delivery  -> log, stop
-                   outside night window, kill switch on          -> log, stop
-  -> frame:        at_timestamp(event ts), retry +2 s, +5 s on 425; evidence row
-  -> perception:   Bedrock, strict JSON, evidence_id must match
-  -> decision:     armadillo AND confidence >= 0.80 AND no person
-                   AND zone not in cooldown AND valve has no open reconcile row
-                   AND evidence captured < 15 s ago
-                   else log, stop
-  -> actions:      each through checkAction(), write-ahead intent first
-                   1. set number.<zone>_irrigation_duration = 30, read it back
-                   2. valve.open_valve
-                   3. interior lights on
-                   4. play the pinned clip on the porch speaker
-                   5. Telegram: frame + verdict + Stop link
-  -> follow-up:    at +40 s read the valve back closed, else alert + reconcile row
+Ring webhook (signed) ──> ingest ──> events (unique source_event_id)
+HA motion sensors (WS) ─┘                │
+                                         v
+                         frame acquisition (Ring adapter owns timestamps)
+                                         │ evidence row (evidence_id)
+                                         v
+                         perception (Bedrock): subjects[] with class + confidence
+                                         │
+                                         v
+                         critique (Bedrock): benign | unknown | suspicious, per subject
+                                         │
+                         ┌───────────────┴───────────────┐
+                         v                               v
+              intruder profile (ladder)        wildlife profile (one-shot)
+                         └───────────────┬───────────────┘
+                                         v
+                         coordinator: one incident, write-ahead intents,
+                         serialized dispatch, allowlist check, reconcile
+                                         │
+                  HA REST adapter   pi_audio adapter (ssh pw-play)   Telegram
+                                         │
+                         status-mcp (Alexa+): status, stand_down, set_mode
 ```
 
-### 1. Triage (deterministic, no model call)
+### 1. Ingest
 
-- Device to zone map in config: Ring Cam 1 -> `front_yard` (valve coverage assumed, Matthew to
-  confirm). Front Door has no valve; its events are logged only.
-- `human`, `vehicle`, `package_delivery` never reach Bedrock or an actuator. `other_motion` and
-  `motion` go on. This is the first of two guards for "humans never trigger an actuator"; the
-  model's `person_present` is the second.
-- Night window from config (default 20:00 to 06:30 local). Kill switch: a file flag plus an env
-  var, checked on every event.
+- Existing `/ring/webhook` route on the Funnel. HMAC verified; dedupe by `meta.request_id` and
+  by `data.id` into `events`; reject events whose `attributes.timestamp` is more than 5 min old.
+- Ring `sub_type` is a hint, never a filter: every motion event goes to perception.
+- HA WebSocket subscriber for secondary motion sensors, used only for the disagreement rule
+  (item 4) and only for zones whose covering sensor is declared in config and has a working
+  battery.
 
-### 2. Frame and evidence
+### 2. Frame acquisition (Ring adapter owns timestamps, never the model)
 
-- Reuse `downloadImageAt` from the probe. Keep the JPEG in memory. Write it to disk only for
-  events that reach the decision step, for the Telegram message and the demo.
-- Evidence row: `evidence_id` = sha256 of (device, capture ts, image hash), capture time from
-  `X-Media-Timestamp`, never from the model.
-- Optional second frame at event +1.5 s if the probe data shows small subjects are missed. Not
-  in the first build.
+- **Event frame:** `at_timestamp` at the event's `attributes.timestamp`, retried at +2 s and
+  +5 s after receipt on `425`. Capture time is `X-Media-Timestamp`.
+- **Follow-up frames for dwell (intruder profile):** a fresh frame every 5 s while an incident
+  is open. Source A: `at_timestamp` at (now - 2 s) while the camera is still recording; valid
+  only if `X-Media-Origin: recording` and `X-Media-Timestamp` is within 5 s of the requested
+  time. Source B (only if its gate passes): live stream (WHEP/RTSPS) with capture time from the
+  RTCP sender-report wallclock and a measured buffering bound under 3 s. Neither passes: the
+  ladder stops at L1 and the gate table says so.
+- A frame with no provable capture time is invalid (fail closed). Every accepted frame gets an
+  immutable `evidence_id` (zone, source, capture time, image sha256).
 
-### 3. Perception (Bedrock)
+### 3. Perception and critique (Bedrock)
 
-Prompt asks for JSON only:
-`{evidence_id, subject: armadillo|cat|dog|opossum|raccoon|person|vehicle|other|none,
-confidence, person_present, night_ir, reason}`. Schema-validated. A mismatched `evidence_id`,
-bad JSON, a timeout or an HTTP error each mean no action.
+- Perception output, schema-validated, `evidence_id` must match the input:
+  `{evidence_id, subjects: [{class: person|armadillo|cat|dog|opossum|raccoon|deer|vehicle|other,
+confidence}], person_present, activity, zone, night_ir}`.
+- Critique compares perception with the context store (routines, known pets, sprinkler
+  schedule, expected deliveries, time of day, mode `home|away|night`) and outputs
+  `{verdict: benign|unknown|suspicious, profile: none|intruder|wildlife, reasons[]}`.
+- Profile choice is deterministic after critique: `person_present` true always selects the
+  intruder profile or none, never wildlife. Wildlife needs a configured species with
+  confidence >= 0.80 and `person_present` false on the same `evidence_id`.
 
-### 4. Decision (deterministic)
+### 4. Evidence rules (both profiles)
 
-Fires only if every gate in the pipeline box passes. Cooldown: 10 min per zone, persisted in
-the existing `cooldowns` table. The `incidents` table is reused with level 0 = logged and
-level 1 = fired. The one-active-incident index stays.
+- Missing, stale, malformed, or low-confidence (< 0.6) evidence never advances anything; it
+  holds the current level. Three consecutive bad-evidence cycles or the global timeout exit the
+  incident. Ring auth failure mid-incident counts as missing evidence.
+- Evidence binding: perception, critique and every action proposal carry the `evidence_id`
+  they came from. Before any level advance and before each escalation call, that evidence must
+  be under 15 s old and the newest evaluated evidence for the zone. Superseded results are
+  discarded.
+- Sensor disagreement (intruder profile): if a declared covering sensor, read under 10 s ago,
+  reports no motion while perception reports a person, the incident is in `disagreement`: owner
+  notified, no actuator, no advance, until agreement or timeout. Zones with no working covering
+  sensor rely on Ring alone (today: all zones, until sensor placement is confirmed).
 
-### 5. Actions
+### 5. Intruder profile: ladder (from v6)
 
-- **Valve:** the duration must be set to 30 and read back as 30 before `open_valve` is sent.
-  If the read-back fails, nothing opens. The 30 s limit is the valve's own setting, so it holds
-  if HA or Quiet Porch dies. Allowlist: `number.set_value` with `value` in `{min: 5, max: 30}`,
-  `valve.open_valve`, `valve.close_valve`.
-- **Lights:** the interior lights Matthew picks, `turn_on` only, reverting after 5 min.
-  Blocked until Tuya is relinked.
-- **Speaker:** HA cannot drive it, so a small adapter runs `ssh rpi-claw pw-play <pinned file>`
-  (one finite clip, no loop, Pi-side volume cap). Stop is `pkill pw-play`. It is registered in
-  the allowlist as `pi_audio.porch_speaker` (exterior, zone `front_yard`), so it passes the same
-  `checkAction` gate and write-ahead log as every HA call. This means adding one adapter kind
-  to the allowlist; no new daemon or port on the Pi.
-- **Telegram:** `sendPhoto` with the frame, verdict, confidence, and a Stop URL button.
-- **Stop:** `GET /ring/stop?i=<incident>&sig=<hmac>` on the existing service and Funnel route.
-  It is signed per incident and expires after 15 min. It runs safety commands only:
-  `close_valve`, speaker stop, lights back. Safety commands bypass evidence guards, as in v6.
+Dwell = continuous person presence in fresh frames in the same zone. A gap over 10 s between
+valid frames, or a valid frame with no person, resets dwell to 0 (level held, not advanced).
 
-### 6. Persistence and recovery
+| Level | Entry                                 | Actions                                                                       | Limits                                                                                                        |
+| ----- | ------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| L0    | verdict benign                        | none, log only                                                                | n/a                                                                                                           |
+| L1    | unknown or suspicious, person present | owner notification with stand-down; interior lights in a room sequence        | lights revert after 15 min; no interior audio, TV visual-only dropped (no confirmed mute read-back available) |
+| L2    | dwell >= 20 s                         | exterior light on toward zone (`switch.patio_light_socket_1` or a substitute) | max 10 min, auto-off                                                                                          |
+| L3    | dwell >= 40 s                         | one finite 5 s synthesized bark clip on the outdoor speaker                   | no loop; max 3 clips in 60 s; Pi-side volume cap                                                              |
+| L4    | dwell >= 60 s AND mode away or night  | sprinkler zone covering the subject                                           | only if the valve's own duration limit is verified (gate); duration set to 30 and read back before open       |
 
-`db.ts` as built: write-ahead `action_intents`, a `reconcile` row for any valve that does not
-read back closed at +40 s, and a boot sweep that closes both valves and stops the speaker before
-any event is accepted. v6's watcher and context-id machinery is cut to the valve only: a
-reconcile row re-sends `close_valve` every 30 s until it reads closed or Matthew clears it.
+Exits: departure (no person in 2 consecutive fresh frames), benign reclassification,
+stand-down, global timeout 5 min, or restart (boot closes open incidents and sweeps exterior
+actuators off). Cooldown 10 min per zone after exit, persisted.
 
-### 7. Safety invariants (tested)
+### 6. Wildlife profile: one-shot (new)
 
-- No `human`/`vehicle`/`package_delivery` event and no `person_present: true` frame can produce
-  an action intent.
-- Only `valve.*`, `number.*_irrigation_duration`, the chosen lights and `pi_audio.porch_speaker`
-  are in the allowlist; lock/cover/alarm stay rejected in code.
+- Night window 20:00 to 06:30 local (Matthew, 2026-10-07). Outside it, log only.
+- On a confirmed species in a zone with a mapped valve (Ring Cam 1 -> `front_yard`, coverage
+  to be confirmed): set `number.front_yard_sprinkler_irrigation_duration` to 30 and read it back
+  as 30, then `valve.open_valve`; interior lights on (revert after 5 min); one pinned clip on the
+  outdoor speaker; Telegram `sendPhoto` with the frame, verdict and a Stop URL button.
+- At +40 s, read the valve back closed; otherwise alert and open a reconcile row.
+- Same coordinator, intents, allowlist, cooldown (10 min per zone) and kill switch as the
+  intruder profile. A wildlife incident and an intruder incident cannot be open at once (the
+  one-active-incident index); an intruder event during a wildlife run cancels the wildlife run
+  first (safety commands), then opens its own incident at L0 evaluation.
+
+### 7. Coordinator (from v6, applies to both profiles)
+
+- One active incident globally, bound to one zone (unique partial index, already in `db.ts`).
+  Events from other zones are logged and notified, never inherited.
+- Write-ahead intent row before every actuator call; marked `done` only on a confirmed result.
+  On boot, every pending intent becomes a `reconcile` row before any event is accepted.
+- Serialized dispatch through one queue; each call re-reads the incident version and aborts on
+  change. Stand-down, exit and reclassification jump the queue: cancel, drop queued actions,
+  wait at most 3 s for the in-flight call, then send off/close/stop to every actuator the
+  incident touched and read back, retrying up to 3 times. Cleanup completes within 15 s or the
+  owner is alerted.
+- Every actuator call has a 3 s deadline. Actions are single immediate service calls (no HA
+  scripts with delays).
+- Reconcile rows (unknown outcome or failed off read-back) inhibit the entity from escalation,
+  re-send off on any transition to on, and run a periodic check every 30 s backing off to 5 min,
+  restored on restart and HA reconnect. A row resolves when HA shows our late command landed
+  (context id) and the entity has since read back off, or the owner clears it. Owner override
+  uses a dedicated HA user `quiet-porch` for all app calls; only configured owner user ids clear
+  a row.
+- Command classes: escalation (on, open, play) obeys every guard; safety (off, close, stop,
+  cancel, reconcile, boot sweep) bypasses evidence-age, disagreement and version guards and is
+  always allowed on allowlisted entities.
+
+### 8. Action adapters
+
+- **HA REST adapter** (HA has no `mcp_server` loaded, so no HA MCP path): every call goes
+  through `checkAction` first.
+- **pi_audio adapter:** HA cannot drive the Anker, so the adapter runs
+  `ssh rpi-claw pw-play <pinned file>`; stop is `pkill pw-play`. It is registered in the
+  allowlist as `pi_audio.porch_speaker` (exterior, zones `front_yard`), with an enum of pinned
+  clips (bark 5 s, wildlife clip), so it passes the same `checkAction` gate and intent log. No
+  new daemon or port on the Pi.
+- **Owner notification:** Telegram (chat to be chosen) with the frame and a signed,
+  incident-scoped Stop link `GET /ring/stop?i=<incident>&sig=<hmac>`, expiring after 15 min,
+  served by the existing service. Stop runs safety commands only. The same link works at every
+  level and for both profiles.
+
+### 9. Safety invariants (in code and tested)
+
+- Never unlock doors or open covers (domain rejected in code; `alarm_control_panel` too).
+- Allowlist by service, entity and parameter bounds; irrigation duration `{min: 5, max: 30}`.
+- Interior silence: interior media players (Echo, TV, receiver) take no audio service.
+- A frame with `person_present: true` can never produce a wildlife action.
 - The valve never opens unless a duration of at most 30 was read back first.
-- Interior media players (Echo, TV) take no audio services (existing rule).
-- Kill switch, cooldown, and the one-active-incident index hold under concurrent webhooks.
+- One active incident globally; entities with open reconcile rows cannot be escalated; kill
+  switch; every decision logged with its frame and timestamps.
 
-## Gates (must pass before the live run)
+### 10. status-mcp (Alexa+ track)
 
-| Gate                                            | Status           | How                                               |
-| ----------------------------------------------- | ---------------- | ------------------------------------------------- |
-| Event-time frame ready within 5 s               | 1 sample: 1.94 s | probe data over a day, both cameras               |
-| Armadillo produces a webhook                    | open             | Matthew enables Other Motion alerts on Ring Cam 1 |
-| Bedrock recognizes a night IR animal            | open             | first real night frame, plus fixture set          |
-| Tuya relinked, valves and lights available      | open             | Matthew supplies Tuya user code                   |
-| Valve closes on its own at 30 s with HA stopped | open             | attended test, Matthew present                    |
-| Valve covers Ring Cam 1's view                  | assumed          | Matthew confirms                                  |
-| Speaker plays and stops on command              | passed (tone)    | repeat with the real clip                         |
-| Telegram chat chosen, Stop link works           | open             | Matthew picks chat                                |
+MCP server (spec 2025-11-25, Streamable HTTP), tailnet/LAN only, bearer token required. Tools:
+`get_incident_status`, `list_recent_incidents` (read token), `stand_down`, `set_mode` (owner
+token). Calm response style. Demo through the simulated Alexa+ web app, and a real Echo if its
+gate passes.
 
-If the armadillo webhook or the valve self-cutoff gate fails, stop and revise this plan.
+## Gates (must pass before the live runs)
+
+| Gate                                                        | Status                                  | Substitute if it fails                      |
+| ----------------------------------------------------------- | --------------------------------------- | ------------------------------------------- |
+| Event frame ready within 5 s                                | 1 sample: 1.94 s                        | none; required                              |
+| Follow-up frames every 5 s during an event (source A or B)  | open                                    | ladder capped at L1                         |
+| Armadillo produces a webhook                                | open: Other Motion alerts on Ring Cam 1 | fixture demo, said so (goal card kill rule) |
+| Bedrock on night IR frames (person and animal)              | open                                    | none for AWS Builder                        |
+| Tuya relinked, valves/lights/patio socket available         | open: Tuya user code                    | smart plug + lamp for L2                    |
+| Valve closes on its own at 30 s with HA stopped             | open: attended                          | L4 and the wildlife sprinkler step cut      |
+| Valve covers Ring Cam 1's view                              | assumed                                 | map wildlife profile to the valve that does |
+| Outdoor speaker plays one finite clip and stops             | passed with a tone                      | none needed                                 |
+| HA user `quiet-porch` and owner user ids recorded           | open                                    | none; required for reconcile                |
+| Covering sensors per zone (1b3a, 4c16 placement, batteries) | open                                    | Ring-only zones                             |
+| Telegram chat chosen, Stop link end to end                  | open                                    | none                                        |
+| Real Echo calling the MCP server                            | open                                    | simulated Alexa+ web app                    |
+
+If a required gate fails, stop and revise this plan before building past it.
 
 ## Build steps
 
-1. **Probe readout** (2026-10-08): summarize `frame-probe.jsonl` in `recon.md`.
-2. **Triage + frame + perception, dry run** (10-08 to 10-10): webhook -> events -> triage ->
-   frame -> Bedrock -> decision log. No actuator code yet. Fixtures: at least 12 labeled frames
-   (armadillo day and night IR, cat, dog, opossum, person night, empty yard, sprinkler spray,
-   rain, low-light uncertain). Public armadillo images are used only for the local eval, never
-   in the demo.
-3. **Actions behind the allowlist** (10-10 to 10-12): HA client, valve sequence with
-   duration read-back, speaker adapter, Telegram, Stop route, boot sweep. All tested against a
-   fake HA and a fake SSH runner.
-4. **Hardware gates** (when Tuya is back): valve self-cutoff with HA stopped, lights, speaker
-   with the real clip, Stop link end to end.
-5. **Trust ladder:** night 1 dry run (Telegram says "would have fired"), then attended live
-   nights, then unattended. Each rung needs Matthew's go.
-6. **Demo and submission** (by 10-20): recorded night run, decision log showing zero actions on
-   human events, architecture diagram, AWS Builder write-up, Devpost submitted.
+1. **Probe readout** (10-08): summarize `frame-probe.jsonl` in `recon.md`. Add a follow-up-frame
+   probe (source A) to the same module.
+2. **Perception + critique + evidence, dry run** (10-08 to 10-10): webhook -> events -> frame ->
+   Bedrock -> profile selection -> decision log, no actuator code. Fixtures: at least 12
+   labeled sequences (v6 set: family arrival, pet, delivery drop-off, sprinkler spray, uncertain
+   low light, staged loiterer, loiterers leaving at 15 s and 30 s, 12 s gap; plus armadillo
+   night IR, armadillo day, opossum, person and armadillo in one frame).
+3. **Coordinator + adapters, dry run first** (10-10 to 10-13): both profiles, HA REST adapter,
+   pi_audio adapter, Telegram, Stop route, boot sweep, reconcile. Tests below.
+4. **status-mcp + simulated Alexa+** (10-13 to 10-14).
+5. **Hardware gates** (as soon as Tuya is back): valve self-cutoff with HA stopped, lights,
+   patio socket, speaker clips, Stop link. Hardware failure tests: HA restart, HA-to-device
+   disconnect, and coordinator kill during L3/L4 and during a wildlife run; pass = clip ends and
+   valve closes on its own.
+6. **Trust ladder:** night 1 dry run (Telegram says "would have fired"), then attended live runs
+   (staged loiterer, armadillo nights), then unattended. Each rung needs Matthew's go.
+7. **Submission** (by 10-20): demo video, decision log, architecture diagram, AWS Builder
+   write-up, Devpost for Ring, Alexa+ and AWS Builder.
 
-## Tests (step 2 and 3)
+## Tests
 
-- Triage: each Ring `sub_type`; night window edges; kill switch.
-- Perception: fenced JSON, prose around JSON, bad schema, mismatched `evidence_id`, timeout,
-  HTTP 5xx each produce zero intents.
-- Decision: confidence 0.79 vs 0.80; `person_present` true with `armadillo`; stale evidence
-  (16 s); cooldown; open reconcile row.
-- Valve: duration read-back mismatch blocks `open_valve`; HA error mid-sequence leaves a
-  reconcile row; +40 s read-back open -> alert + re-close loop.
-- Stop: bad signature, expired, replayed; Stop during the sequence aborts queued steps.
-- Concurrency: two webhooks for the same event (dedupe); two events 2 s apart (one incident).
-- Boot: pending intent becomes a reconcile row; sweep closes valves before events are taken.
+- **From v6 (kept):** ladder order and dwell timing; benign equals zero actions; stale frames do
+  not advance; interior audio deny; lock/cover rejection; concurrent events create one incident;
+  duplicate webhook ignored; restart closes incidents and sweeps actuators off; late model
+  result after stand-down dropped; stand-down during every dwell and action phase; paused
+  in-flight race; in-flight call that never returns (cleanup starts within 4 s, ends within
+  15 s, reconcile row created); late "on" after cleanup reversed by the watcher; app user id
+  never clears its own row; owner "on" clears it; crash before and after dispatch with a late
+  "on"; transient off failure recovered by the periodic check; delayed critique of an older
+  frame discarded; mismatched `evidence_id` or model timestamp rejected; zone B cannot inherit
+  zone A's level; HA reconnect with an open row; safety commands succeed with stale or missing
+  evidence and during disagreement; 12 s gap resets dwell; Ring token expiry mid-incident holds
+  then exits with a sweep.
+- **New for v7:** Ring `sub_type` does not skip perception; wildlife profile never fires with
+  `person_present: true`; confidence 0.79 vs 0.80; outside 20:00 to 06:30 logs only; irrigation
+  read-back mismatch blocks `open_valve`; +40 s read-back open creates a reconcile row; intruder
+  event during a wildlife run cancels it first; follow-up frame with origin `snapshot` or a
+  timestamp more than 5 s off is rejected; Stop link bad signature, expired, replayed;
+  pi_audio clip not in the enum rejected; status-mcp unauthenticated and read-token
+  `stand_down`/`set_mode` rejected.
 
 ## Evaluation
 
-- Fixture set: every non-armadillo frame gives zero intents; armadillo frames fire at an
-  observed rate reported honestly, not tuned to the fixtures.
-- Live: webhook to valve open under 10 s p50 across attended runs.
-- Decision log over the whole live period: zero actions on `human`, `vehicle` and pet events.
+- Fixtures: benign sequences give zero actions; staged loiterer reaches the highest gated-in
+  level on schedule; loiterer leaving at 15 s exits before L2; at 30 s reaches L2 and exits
+  before L3; gap resets dwell; uncertain and disagreeing sequences fire nothing; armadillo
+  frames fire the wildlife profile and every non-wildlife frame does not.
+- Latency: webhook to first action under 10 s p50 across at least 5 live runs.
+
+## Demo video (under 3 min)
+
+Benign events first (zero actions in the decision log), then a staged loiterer at night through
+every gated-in level with the interior silent and the stand-down visible, then the armadillo
+night run (or recorded fixtures, labeled as such), then "is everything okay?" through Alexa+.
+Clip audio muted or replaced in the public video.
+
+## Done condition
+
+All true: repo calls the Ring API and runs the MCP server in code; test suite green including
+every safety and concurrency test above; fixture evaluation meets every line; a recorded live
+run shows the intruder ladder through the highest gated-in level with a successful stand-down,
+and an armadillo night run (or the goal card's fixture fallback, labeled) showing the valve
+opening and closing on its own within 30 s; hardware failure tests pass; latency target met;
+demo video public and under 3:00; Devpost shows Submitted for Ring, Alexa+ and AWS Builder (if
+the Bedrock gate holds) before 2026-10-23 12:00 PT.
 
 ## Open questions for Matthew
 
-1. Turn on Other Motion Smart Alerts on Ring Cam 1, and check its motion zones and schedule.
-2. Tuya user code to relink the valves and lights.
-3. Does the front-yard valve cover Ring Cam 1's view?
-4. Which interior lights?
+1. Turn on Other Motion Smart Alerts on Ring Cam 1; check its zones and schedule.
+2. Tuya user code to relink valves, lights and patio sockets.
+3. Does the front-yard valve cover Ring Cam 1's view? Which exterior light faces each zone?
+4. Which interior lights for L1 and the wildlife run?
 5. Telegram: the Attention group or a separate chat?
-6. A clip he owns, and agreement to mute it in the public video.
-7. Night window: is 20:00 to 06:30 right?
-8. Devpost tracks: v6 entered Ring + Alexa+ + AWS Builder. Alexa+ needs a voice or MCP surface
-   this plan no longer has. Drop Alexa+, or add a small read-only status MCP as a stretch step
-   after step 6?
+6. Where are motion sensors 1b3a and 4c16, and will 4c16 get a battery?
+7. A wildlife clip and a bark clip he owns or synthesizes; mute the clip in the public video.
+8. Devpost registration status and AWS credits before 10-21.
