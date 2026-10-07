@@ -1,7 +1,7 @@
 # Plan v7: Quiet Porch, AI home deterrent (intruder ladder + nuisance wildlife)
 
 Supersedes plan v6 (`~/.claude/checkmate/runs/2026-09-27-1021-ai-home-deterrent-v5/plan-v2.md`).
-Goal card: `docs/goal.md` (Q-20261007-0001). Revised 2026-10-07 after Matthew's correction:
+Goal card: `docs/goal.md` (Q-20261007-0001). Checkmate consensus 2026-10-07, run `2026-10-07-1530-quiet-porch-plan-v7` (3 rounds). Revised 2026-10-07 after Matthew's correction:
 "We shouldn't be removing the original functionality of what this system was designed to do.
 The armadillo is just a test scenario, not the only thing it can do."
 
@@ -23,7 +23,8 @@ for profile 1.
 
 ## Verified facts (this session or `docs/recon.md`)
 
-- Ring: signed `motion_detected` webhooks, 72+ received, 0 rejected. Attributes are exactly
+- Ring (counted 2026-10-07 15:35 CDT from `webhook-events.jsonl`): 73 signed webhooks, 69 of
+  them `motion_detected`, 0 rejected. Attributes are exactly
   `source`, `source_type`, `timestamp`, `sub_type`. Ring Cam 1 sent only `human`; Front Door
   only `motion` (Smart Alerts off there). Token refresh at 75% of lifetime works.
 - `at_timestamp` at the event time returns the event's own frame (`X-Media-Origin: recording`).
@@ -33,6 +34,9 @@ for profile 1.
   (1091 s old on 10-06), so it is not used for freshness.
 - Bedrock Converse (`global.anthropic.claude-sonnet-4-6`, bearer auth): day frame in about
   2.4 s; JSON comes inside a code fence and `parseModelJson` handles it.
+- HA facts below were read live via REST `/api/states` and `/api/config` on 2026-10-07 between
+  15:19 and 15:25 CDT and are recorded in `docs/recon.md` ("HA inventory"); they are
+  observations at that time and are re-read at each gate.
 - Home Assistant 2026.9.4 at `HASS_URL` answers with `HASS_TOKEN` (231 entities). The
   `mcp_server` integration is NOT loaded. Integrations include `tuya` and `alexa_devices`.
 - HA actuators, all Tuya and all currently `unavailable` (Tuya link broken):
@@ -64,7 +68,7 @@ HA motion sensors (WS) ─┘                │
                          perception (Bedrock): subjects[] with class + confidence
                                          │
                                          v
-                         critique (Bedrock): benign | unknown | suspicious, per subject
+                         critique (Bedrock): benign | uncertain | unknown | suspicious
                                          │
                          ┌───────────────┴───────────────┐
                          v                               v
@@ -91,7 +95,10 @@ HA motion sensors (WS) ─┘                │
 ### 2. Frame acquisition (Ring adapter owns timestamps, never the model)
 
 - **Event frame:** `at_timestamp` at the event's `attributes.timestamp`, retried at +2 s and
-  +5 s after receipt on `425`. Capture time is `X-Media-Timestamp`.
+  +5 s after receipt on `425`. Accepted only if all hold: HTTP 200 with `image/jpeg`;
+  `X-Media-Origin: recording` (a `snapshot` is rejected however fresh); `X-Media-Timestamp`
+  present, finite, and within 1000 ms of the event timestamp (observed: 0 ms Ring Cam 1,
+  611 ms Front Door); and not later than our receipt time. Anything else is no evidence.
 - **Follow-up frames for dwell (intruder profile):** a fresh frame every 5 s while an incident
   is open. Source A: `at_timestamp` at (now - 2 s) while the camera is still recording; valid
   only if `X-Media-Origin: recording` and `X-Media-Timestamp` is within 5 s of the requested
@@ -106,12 +113,27 @@ HA motion sensors (WS) ─┘                │
 - Perception output, schema-validated, `evidence_id` must match the input:
   `{evidence_id, subjects: [{class: person|armadillo|cat|dog|opossum|raccoon|deer|vehicle|other,
 confidence}], person_present, activity, zone, night_ir}`.
+- **Person evidence is derived, not trusted (deterministic, after schema validation):**
+  `person_signal` = `person_present` OR any `person` subject with confidence >= 0.30.
+  Contradictions are malformed evidence (no action): `person_present` false with a `person`
+  subject >= 0.30, or `person_present` true with no `person` subject.
+- **Confidence tiers for people:** `person_detected` = a `person` subject with confidence
+  >= 0.80. `person_uncertain` = `person_signal` without `person_detected`.
 - Critique compares perception with the context store (routines, known pets, sprinkler
   schedule, expected deliveries, time of day, mode `home|away|night`) and outputs
-  `{verdict: benign|unknown|suspicious, profile: none|intruder|wildlife, reasons[]}`.
-- Profile choice is deterministic after critique: `person_present` true always selects the
-  intruder profile or none, never wildlife. Wildlife needs a configured species with
-  confidence >= 0.80 and `person_present` false on the same `evidence_id`.
+  `{verdict: benign|uncertain|unknown|suspicious|nuisance, reasons[]}`. `uncertain` means the
+  critique cannot decide. `nuisance` means a configured nuisance species is present and not a
+  known pet or expected animal.
+- **Global rule first:** critique `benign` is log only, for every profile, whatever the
+  perception confidence.
+- **Profile choice (deterministic):**
+  - `person_uncertain`, or critique `uncertain`: log only. Zero actuator calls and no owner
+    notification (goal card: "anything uncertain ... only logged").
+  - `person_detected` with `benign`: L0, log only.
+  - `person_detected` with `unknown` or `suspicious`: intruder profile.
+  - Wildlife profile only if ALL hold: no `person_signal`, a configured species with
+    confidence >= 0.80, critique verdict exactly `nuisance`, inside the night window.
+  - Any `person_signal` blocks the wildlife profile on that `evidence_id`.
 
 ### 4. Evidence rules (both profiles)
 
@@ -135,14 +157,16 @@ valid frames, or a valid frame with no person, resets dwell to 0 (level held, no
 | Level | Entry                                 | Actions                                                                       | Limits                                                                                                        |
 | ----- | ------------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | L0    | verdict benign                        | none, log only                                                                | n/a                                                                                                           |
-| L1    | unknown or suspicious, person present | owner notification with stand-down; interior lights in a room sequence        | lights revert after 15 min; no interior audio, TV visual-only dropped (no confirmed mute read-back available) |
+| L1    | person_detected AND unknown/suspicious | owner notification with stand-down; interior lights in a room sequence        | lights revert after 15 min; no interior audio, TV visual-only dropped (no confirmed mute read-back available) |
 | L2    | dwell >= 20 s                         | exterior light on toward zone (`switch.patio_light_socket_1` or a substitute) | max 10 min, auto-off                                                                                          |
 | L3    | dwell >= 40 s                         | one finite 5 s synthesized bark clip on the outdoor speaker                   | no loop; max 3 clips in 60 s; Pi-side volume cap                                                              |
 | L4    | dwell >= 60 s AND mode away or night  | sprinkler zone covering the subject                                           | only if the valve's own duration limit is verified (gate); duration set to 30 and read back before open       |
 
 Exits: departure (no person in 2 consecutive fresh frames), benign reclassification,
 stand-down, global timeout 5 min, or restart (boot closes open incidents and sweeps exterior
-actuators off). Cooldown 10 min per zone after exit, persisted.
+actuators off). Intruder cooldown 10 min per zone after exit, persisted per (zone, profile).
+A frame that is `person_uncertain` during an open incident counts as bad evidence (holds the
+level, never advances it).
 
 ### 6. Wildlife profile: one-shot (new)
 
@@ -152,10 +176,16 @@ actuators off). Cooldown 10 min per zone after exit, persisted.
   as 30, then `valve.open_valve`; interior lights on (revert after 5 min); one pinned clip on the
   outdoor speaker; Telegram `sendPhoto` with the frame, verdict and a Stop URL button.
 - At +40 s, read the valve back closed; otherwise alert and open a reconcile row.
-- Same coordinator, intents, allowlist, cooldown (10 min per zone) and kill switch as the
-  intruder profile. A wildlife incident and an intruder incident cannot be open at once (the
-  one-active-incident index); an intruder event during a wildlife run cancels the wildlife run
-  first (safety commands), then opens its own incident at L0 evaluation.
+- Same coordinator, intents, allowlist and kill switch as the intruder profile. Wildlife
+  cooldown is its own row: 10 min per (zone, `wildlife`).
+- **Preemption by an intruder (atomic):** in ONE SQLite transaction, the wildlife incident
+  becomes `cancelled` with `exit_reason = 'preempted'` and the intruder incident is inserted
+  (`profile = intruder`, L0 evaluation). The one-active-incident index holds throughout. The
+  new incident's queue starts with the wildlife cleanup as safety commands (close valve, stop
+  audio, lights back). A wildlife cooldown never blocks intruder evaluation; only an intruder
+  cooldown on that zone does. If cleanup fails, the entities get reconcile rows (inhibited from
+  escalation) and the intruder ladder continues without them.
+- An armadillo event during an open intruder incident is logged only.
 
 ### 7. Coordinator (from v6, applies to both profiles)
 
@@ -163,6 +193,20 @@ actuators off). Cooldown 10 min per zone after exit, persisted.
   Events from other zones are logged and notified, never inherited.
 - Write-ahead intent row before every actuator call; marked `done` only on a confirmed result.
   On boot, every pending intent becomes a `reconcile` row before any event is accepted.
+- **Correlation contract (schema change in `db.ts`):** `action_intents` gets a local
+  `intent_id` (uuid, unique, written before dispatch). `ha_context_id` becomes nullable and is
+  filled only from what HA returns for that call (the HA WebSocket `call_service` result
+  context, or the context on the changed states in the REST response); the plan never invents
+  one. Outcomes: `done` (context captured, state read back), `unknown` (timeout, crash, or
+  disconnect before a response). An `unknown` intent always opens a reconcile row with a null
+  context id.
+- Late-command attribution for a null-context row: the adapter subscribes to HA
+  `state_changed` events. A state change on that entity after `dispatched_at`, whose context
+  `user_id` is the `quiet-porch` HA user, is treated as possibly ours: the watcher sends the
+  safety command and reads back. A null-context row never resolves on time or read-back alone:
+  it stays open, the entity stays inhibited from escalation, and its watcher stays active
+  (restored on restart and HA reconnect) until the owner clears it. HA documents no maximum
+  late-delivery bound, so the plan assumes none.
 - Serialized dispatch through one queue; each call re-reads the incident version and aborts on
   change. Stand-down, exit and reclassification jump the queue: cancel, drop queued actions,
   wait at most 3 s for the in-flight call, then send off/close/stop to every actuator the
@@ -172,8 +216,9 @@ actuators off). Cooldown 10 min per zone after exit, persisted.
   scripts with delays).
 - Reconcile rows (unknown outcome or failed off read-back) inhibit the entity from escalation,
   re-send off on any transition to on, and run a periodic check every 30 s backing off to 5 min,
-  restored on restart and HA reconnect. A row resolves when HA shows our late command landed
-  (context id) and the entity has since read back off, or the owner clears it. Owner override
+  restored on restart and HA reconnect. A row with a captured context id resolves when HA shows
+  that context landed and the entity has since read back off; a null-context row resolves only
+  by owner clear; the owner can always clear any row. Owner override
   uses a dedicated HA user `quiet-porch` for all app calls; only configured owner user ids clear
   a row.
 - Command classes: escalation (on, open, play) obeys every guard; safety (off, close, stop,
@@ -182,10 +227,31 @@ actuators off). Cooldown 10 min per zone after exit, persisted.
 
 ### 8. Action adapters
 
-- **HA REST adapter** (HA has no `mcp_server` loaded, so no HA MCP path): every call goes
-  through `checkAction` first.
-- **pi_audio adapter:** HA cannot drive the Anker, so the adapter runs
-  `ssh rpi-claw pw-play <pinned file>`; stop is `pkill pw-play`. It is registered in the
+- **HA adapter** (HA has no `mcp_server` loaded, so no HA MCP path): every call goes through
+  `checkAction` first.
+- **Allowlist extension for bounded setters (code change in `allowlist.ts`):** a new entry kind
+  `setter`, e.g. `number.front_yard_sprinkler_irrigation_duration` with `set_value` and
+  `value` in `{min: 5, max: 30}`, plus `cleanup_via: valve.front_yard_sprinkler_valve`. Load
+  rejects a setter whose `cleanup_via` entity is missing or lacks `close_valve`. `set_value`
+  stays an escalation command (all guards apply); it is never a safety command. Cleanup and
+  boot sweep act on the linked valve.
+- **pi_audio adapter (own contract, since it has no HA state or context):**
+  - Launch: `ssh rpi-claw qp-play <intent_id> <dispatch_epoch_ms> <clip>`. `qp-play` is a
+    short script on the Pi (no daemon, no port). Everything below runs while holding
+    `flock ~/.local/state/quiet-porch/audio.lock`: refuse if `audio-stop-epoch` >=
+    `dispatch_epoch_ms`; set the sink volume to at most the cap; `systemd-run --user
+    --unit=qp-audio-<intent_id> -p RuntimeMaxSec=8 pw-play <clip>`; release the lock and
+    return. The ack (unit started) comes back within the 3 s deadline; playback runs on. Both
+    epochs come from ProBook's clock, so Pi clock skew cannot reorder them.
+  - Command identity is the unit name. `RuntimeMaxSec=8` ends any clip on the Pi itself even
+    if SSH or ProBook dies.
+  - Stop (safety): `ssh rpi-claw qp-stop <stop_epoch_ms>`, under the same lock: write
+    `audio-stop-epoch`, `systemctl --user stop 'qp-audio-*'`, read back that no `qp-audio-*`
+    unit is active, release. A launch that passed its check holds the lock until its unit
+    exists, so Stop either sees and stops that unit or runs first and the launch is refused.
+  - Reconcile for `pi_audio.porch_speaker`: periodic check every 30 s lists active
+    `qp-audio-*` units and stops them; an SSH failure keeps the row open and the entity
+    inhibited. It is registered in the
   allowlist as `pi_audio.porch_speaker` (exterior, zones `front_yard`), with an enum of pinned
   clips (bark 5 s, wildlife clip), so it passes the same `checkAction` gate and intent log. No
   new daemon or port on the Pi.
@@ -220,7 +286,7 @@ gate passes.
 | Armadillo produces a webhook                                | open: Other Motion alerts on Ring Cam 1 | fixture demo, said so (goal card kill rule) |
 | Bedrock on night IR frames (person and animal)              | open                                    | none for AWS Builder                        |
 | Tuya relinked, valves/lights/patio socket available         | open: Tuya user code                    | smart plug + lamp for L2                    |
-| Valve closes on its own at 30 s with HA stopped             | open: attended                          | L4 and the wildlife sprinkler step cut      |
+| Valve closes on its own at 30 s with HA stopped | open: attended | none for the wildlife deliverable: failure stops the build and goes to Matthew for a goal revision; L4 alone may be cut |
 | Valve covers Ring Cam 1's view                              | assumed                                 | map wildlife profile to the valve that does |
 | Outdoor speaker plays one finite clip and stops             | passed with a tone                      | none needed                                 |
 | HA user `quiet-porch` and owner user ids recorded           | open                                    | none; required for reconcile                |
@@ -265,6 +331,33 @@ If a required gate fails, stop and revise this plan before building past it.
   zone A's level; HA reconnect with an open row; safety commands succeed with stale or missing
   evidence and during disagreement; 12 s gap resets dwell; Ring token expiry mid-incident holds
   then exits with a sweep.
+- **From review round 2:** armadillo 0.95 with critique `benign` (known pet list) gives zero
+  intents; critique `nuisance` reaches wildlife; null-context row stays open past any time
+  window and across restart, and a `turn_on` landing 10 min later is reversed; qp-play paused
+  after its epoch check while qp-stop runs: qp-stop blocks until the launch releases the lock,
+  then returns with no active audio unit and nothing plays afterward (a brief start before
+  Stop takes the lock is allowed); stop-first then launch: launch refused;
+  launch with a `dispatch_epoch_ms` older than the stop epoch is refused.
+- **New for v7, from review round 1:**
+  - Uncertainty: a 0.65 person with `unknown` and a critique `uncertain` each give zero
+    actuator calls and no notification; 0.80 `unknown` reaches L1.
+  - Contradictory perception (`person_present` false with person 0.95 and armadillo 0.90;
+    `person_present` true with no person subject) is malformed: zero intents.
+  - Event frame: a fresh `snapshot`, a recording 1500 ms from the event, a future timestamp,
+    and a missing `X-Media-Timestamp` are each rejected; 611 ms recording accepted.
+  - Allowlist: setter without `cleanup_via`, or pointing at an entity without `close_valve`,
+    fails to load; `set_value` 31 rejected; `set_value` classified escalation.
+  - Correlation: HA call timeout gives an `unknown` intent and a null-context reconcile row; a
+    later `quiet-porch` state change on that entity is reversed; restart with such a row keeps
+    the entity inhibited; adapter tests run against a fake HA WebSocket server, not synthetic
+    ids.
+  - pi_audio: launch ack within 3 s while a 5 s clip plays on; delayed launch after a stop is
+    refused by the stop epoch; SSH loss mid-clip ends by `RuntimeMaxSec`; stop read-back
+    finds no active unit; volume above the cap is clamped (hardware test with the real clips).
+  - Preemption: same-zone person during watering cancels wildlife and opens the intruder
+    incident in one transaction; wildlife cooldown does not block it; cleanup failure leaves
+    reconcile rows and the ladder continues; a cross-zone person while watering; two
+    concurrent intruder events during a wildlife run give one intruder incident.
 - **New for v7:** Ring `sub_type` does not skip perception; wildlife profile never fires with
   `person_present: true`; confidence 0.79 vs 0.80; outside 20:00 to 06:30 logs only; irrigation
   read-back mismatch blocks `open_valve`; +40 s read-back open creates a reconcile row; intruder
@@ -277,7 +370,9 @@ If a required gate fails, stop and revise this plan before building past it.
 
 - Fixtures: benign sequences give zero actions; staged loiterer reaches the highest gated-in
   level on schedule; loiterer leaving at 15 s exits before L2; at 30 s reaches L2 and exits
-  before L3; gap resets dwell; uncertain and disagreeing sequences fire nothing; armadillo
+  before L3; gap resets dwell; uncertain sequences (person confidence 0.6 to 0.79, or critique `uncertain`) fire no actuator
+  and send no notification; disagreeing sequences fire no actuator and send exactly one owner
+  notification; armadillo
   frames fire the wildlife profile and every non-wildlife frame does not.
 - Latency: webhook to first action under 10 s p50 across at least 5 live runs.
 

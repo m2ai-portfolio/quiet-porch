@@ -157,3 +157,50 @@ times. No frame was pulled for these events.
   about 2 min after boot, default sink restored, tone played.
 - Sink volume is 0.69. A `wpctl set-volume` on node 59 hit the internal node, not the sink.
 - **Open:** Home Assistant cannot play to this speaker yet; playback today is `pw-play` on the Pi.
+
+## HA inventory, read 2026-10-07 15:19 to 15:25 CDT (REST /api/states, /api/config)
+
+- HA 2026.9.4; `mcp_server` loaded: False; tuya loaded: True; alexa_devices loaded: True.
+- 231 entities. Re-read at 15:33 CDT for this record.
+- `binary_sensor.bedroom_echo_spot_motion`: off
+- `binary_sensor.front_room_motion`: unavailable
+- `binary_sensor.living_room_echo_spot_motion`: off
+- `binary_sensor.motion_sensor`: unavailable
+- `binary_sensor.motion_sensor_1b3a_light`: off
+- `binary_sensor.motion_sensor_1b3a_motion`: off
+- `binary_sensor.motion_sensor_4c16_light`: on
+- `binary_sensor.motion_sensor_4c16_motion`: off
+- `light.backdoor_light`: unavailable
+- `light.bathroom_1`: unavailable
+- `light.bathroom_2`: unavailable
+- `light.bright_light`: unavailable
+- `light.bright_light_2`: unavailable
+- `light.bright_light_3`: unavailable
+- `light.color_lights`: unavailable
+- `light.color_lights_2`: unavailable
+- `light.headboard`: unavailable
+- `light.stairs`: unavailable
+- `light.worklight_1`: unavailable
+- `light.worklight_2`: unavailable
+- `light.worklight_3`: unavailable
+- `light.worklight_4`: unavailable
+- `media_player.65_qled`: off
+- `media_player.bedroom_echo_spot`: idle
+- `media_player.everywhere`: idle
+- `media_player.front_room`: unavailable
+- `media_player.living_room_echo_spot`: idle
+- `media_player.main_room_echo`: unavailable
+- `media_player.matthew_s_echo_show_8_3rd_gen`: idle
+- `media_player.onkyo_tx_nr676_ea3ccf`: off
+- `media_player.shield`: off
+- `media_player.surround_1`: unavailable
+- `number.backyard_sprinkler_irrigation_duration`: unavailable
+- `number.front_yard_sprinkler_irrigation_duration`: unavailable
+- `sensor.motion_sensor_1b3a_battery`: 20
+- `sensor.motion_sensor_4c16_battery`: 0
+- `sensor.motion_sensor_battery_sensor`: unavailable
+- `switch.back_patio_socket_1`: unavailable
+- `switch.back_patio_socket_2`: unavailable
+- `switch.patio_light_socket_1`: unavailable
+- `valve.backyard_sprinkler_valve`: unavailable
+- `valve.front_yard_sprinkler_valve`: unavailable
