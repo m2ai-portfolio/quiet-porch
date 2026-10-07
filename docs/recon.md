@@ -204,3 +204,22 @@ times. No frame was pulled for these events.
 - `switch.patio_light_socket_1`: unavailable
 - `valve.backyard_sprinkler_valve`: unavailable
 - `valve.front_yard_sprinkler_valve`: unavailable
+
+## Fixture evaluation set1, 2026-10-07 15:53 CDT (plan v7 step 2)
+
+`node scripts/eval-fixtures.ts` over 19 labeled single frames in
+`~/.local/state/quiet-porch/fixtures/set1` (outside the repo): 7 armadillo (Wikimedia Commons,
+2 synthetic-IR, 1 real night flash, 2 small/far), 5 other animals (opossum incl. synthetic IR,
+raccoon, deer, dog), 5 real Ring frames from our cameras, 2 synthetic-IR person frames in
+mode `away`. Real Bedrock, the live `judgeFrame` path.
+
+- **18/19 as labeled.** Every armadillo frame reached `wildlife` (confidence 0.93 to 0.99,
+  verdict `nuisance`), including both synthetic-IR ones; the daytime one was logged
+  (`outside_night_window`). Every other animal was `nothing_actionable`. Both `away` person
+  frames reached `intruder`.
+- **One false alarm:** `ring-door-person` (real Front Door frame, daytime, mode `home`, person
+  on the porch facing away) got critique `unknown` and would have opened an intruder incident
+  at L1. The label assumed a household member; the system cannot know that.
+- `ring-door-empty` saw a "small figure" at 0.72 and was logged as `person_uncertain`.
+- Not covered yet: a real night IR armadillo from our camera, real night people, multi-frame
+  dwell sequences (step 3).

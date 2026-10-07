@@ -13,7 +13,7 @@ import {
   type HouseholdContext,
 } from './critique.ts';
 import { recordDecision, recordEvent, recordEvidence, type DecisionKind } from './db.ts';
-import { decide, inWindow, needsCritique } from './decide.ts';
+import { decide, inWindow, needsCritique, type Decision } from './decide.ts';
 import {
   acquireEventFrame,
   probeFollowUps,
@@ -127,6 +127,66 @@ function wouldText(kind: DecisionKind, zone: string, species?: string): string |
   return undefined;
 }
 
+export interface Judgement {
+  decision: Decision;
+  perception: unknown; // raw model JSON, or {error} when it could not be parsed
+  critique?: unknown;
+  perceptionMs: number;
+  critiqueMs?: number;
+}
+
+// Perception -> (critique) -> decide on one accepted frame. Shared by the live pipeline and the
+// fixture evaluation, so both exercise the same prompts, validation and rules.
+export async function judgeFrame(
+  jpeg: Buffer,
+  captureTs: number,
+  evidenceId: string,
+  zone: string,
+  cfg: Pick<PipelineConfig, 'timezone' | 'nightWindow' | 'context'>,
+  converseFn: (content: ContentBlock[]) => Promise<string>,
+  inNightWindowOverride?: boolean,
+): Promise<Judgement> {
+  const perc = await modelJson<Perception>(
+    () => converseFn([imageBlock(jpeg), { text: perceptionPrompt(evidenceId) }]),
+    (raw) => validatePerception(raw, evidenceId),
+  );
+  const species = cfg.context.nuisanceSpecies;
+  let crit: { result: Validated<Critique>; ms: number; raw?: unknown } | undefined;
+  if (perc.result.ok && needsCritique(perc.result.value, species)) {
+    const p = perc.result.value;
+    const localTime = new Intl.DateTimeFormat('en-US', {
+      timeZone: cfg.timezone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).format(new Date(captureTs));
+    crit = await modelJson<Critique>(
+      () => converseFn([{ text: critiquePrompt(p, cfg.context, zone, localTime) }]),
+      (raw) => validateCritique(raw, evidenceId),
+    );
+  }
+  const decision = decide({
+    perception: perc.result,
+    critique: crit?.result,
+    nuisanceSpecies: species,
+    inNightWindow:
+      inNightWindowOverride ??
+      inWindow(captureTs, cfg.nightWindow.start, cfg.nightWindow.end, cfg.timezone),
+  });
+  return {
+    decision,
+    perception: perc.raw ?? (perc.result.ok ? perc.result.value : { error: perc.result.reason }),
+    ...(crit
+      ? {
+          critique:
+            crit.raw ?? (crit.result.ok ? crit.result.value : { error: crit.result.reason }),
+        }
+      : {}),
+    perceptionMs: perc.ms,
+    critiqueMs: crit?.ms,
+  };
+}
+
 export function createPipeline(cfg: PipelineConfig, deps: PipelineDeps) {
   const clock = deps.clock ?? realClock;
   const inFlight = new Set<string>();
@@ -202,52 +262,16 @@ export function createPipeline(cfg: PipelineConfig, deps: PipelineDeps) {
         imageSha256: imageSha,
       });
 
-      const perc = await modelJson<Perception>(
-        () => deps.converse([imageBlock(frame.jpeg), { text: perceptionPrompt(evidenceId) }]),
-        (raw) => validatePerception(raw, evidenceId),
-      );
-      timings.perception_ms = perc.ms;
-      const species = cfg.context.nuisanceSpecies;
-
-      let crit: { result: Validated<Critique>; ms: number; raw?: unknown } | undefined;
-      if (perc.result.ok && needsCritique(perc.result.value, species)) {
-        const p = perc.result.value;
-        const localTime = new Intl.DateTimeFormat('en-US', {
-          timeZone: cfg.timezone,
-          hour: '2-digit',
-          minute: '2-digit',
-          hourCycle: 'h23',
-        }).format(new Date(frame.captureTs));
-        crit = await modelJson<Critique>(
-          () => deps.converse([{ text: critiquePrompt(p, cfg.context, zone, localTime) }]),
-          (raw) => validateCritique(raw, evidenceId),
-        );
-        timings.critique_ms = crit.ms;
-      }
-
-      const d = decide({
-        perception: perc.result,
-        critique: crit?.result,
-        nuisanceSpecies: species,
-        inNightWindow: inWindow(
-          frame.captureTs,
-          cfg.nightWindow.start,
-          cfg.nightWindow.end,
-          cfg.timezone,
-        ),
-      });
+      const j = await judgeFrame(frame.jpeg, frame.captureTs, evidenceId, zone, cfg, deps.converse);
+      timings.perception_ms = j.perceptionMs;
+      if (j.critiqueMs !== undefined) timings.critique_ms = j.critiqueMs;
+      const d = j.decision;
       const age = clock.now() - frame.captureTs;
       const extra: Partial<DecisionRecord> = {
         evidence_id: evidenceId,
         evidence_age_ms: age,
-        perception:
-          perc.raw ?? (perc.result.ok ? perc.result.value : { error: perc.result.reason }),
-        ...(crit
-          ? {
-              critique:
-                crit.raw ?? (crit.result.ok ? crit.result.value : { error: crit.result.reason }),
-            }
-          : {}),
+        perception: j.perception,
+        ...(j.critique !== undefined ? { critique: j.critique } : {}),
       };
       // Evidence must still be fresh when a profile would act (plan v7 section 4).
       if ((d.kind === 'intruder' || d.kind === 'wildlife') && age > MAX_EVIDENCE_AGE_MS) {
