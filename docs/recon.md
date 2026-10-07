@@ -116,6 +116,25 @@ on 2026-10-06, 0 rejected. Attributes are exactly `source`, `source_type`, `time
 `sub_type`. Front Door sent `sub_type: motion` once; Ring Cam 1 sent `sub_type: human` five
 times. No frame was pulled for these events.
 
+## First day of motion events, checked 2026-10-07 13:33 CDT
+
+- **Verified:** 65 signed `motion_detected` webhooks from the link to 13:17 on 10-07, 0 rejected,
+  0 service restarts. Front Door sent 22 (`sub_type: motion` every time); Ring Cam 1 sent 43
+  (`sub_type: human` every time). Busiest hour 11:00 to 12:00 CDT with 14.
+- **Verified:** delivery lag from `attributes.timestamp` to our receipt, n=65: min 708 ms,
+  p50 1079 ms, p90 1335 ms, max 30720 ms.
+- **Verified:** `at_timestamp` set to the event's `attributes.timestamp` returns a frame from the
+  event itself: `X-Media-Origin: recording`, frame 0 ms (Ring Cam 1, 1920x1080) and 611 ms
+  (Front Door, 1280x720) after the event, about 0.9 s per download. Pulled hours after the
+  events, not live.
+- **Verified:** `latest_in_range` over the 30 s after an event returned frames 10.8 s and 29.9 s
+  after the event, so it picks the end of the window, not the event.
+- The 10-06 `416` on Front Door and the 1091 s old snapshot came from before any recordings
+  existed; they do not mean stored frames are stale.
+- **Open:** whether `at_timestamp` works within the ~2 s after a webhook, or returns
+  `425 RECORDING_NOT_READY` until the clip is processed. This decides whether stored frames can
+  meet the plan's 5 s freshness rule.
+
 ## Service state
 
 - `quiet-porch.service` (systemd --user) enabled at boot on 2026-10-06; linger is on.
