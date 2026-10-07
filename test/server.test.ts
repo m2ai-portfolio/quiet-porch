@@ -17,7 +17,7 @@ interface RingCall {
 }
 
 // Fake Ring: records every outbound call and answers like the documented endpoints.
-function fakeRing(calls: RingCall[], opts: { failPost?: boolean } = {}) {
+function fakeRing(calls: RingCall[], opts: { failPost?: boolean; frameProbe?: boolean } = {}) {
   return vi.fn(async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
@@ -42,6 +42,15 @@ function fakeRing(calls: RingCall[], opts: { failPost?: boolean } = {}) {
     }
     if (url.endsWith('/v1/accounts/me/app-integrations') && method === 'PATCH')
       return json(200, {});
+    if (url.endsWith('/media/image/download')) {
+      return new Response(null, { status: 303, headers: { Location: 'https://media.test/f1' } });
+    }
+    if (url === 'https://media.test/f1') {
+      return new Response(new Uint8Array(4), {
+        status: 200,
+        headers: { 'X-Media-Timestamp': '1791400320000', 'X-Media-Origin': 'recording' },
+      });
+    }
     if (url.endsWith('/v1/devices')) {
       return json(200, { data: [{ id: 'd1', attributes: { name: 'Front Door' } }] });
     }
@@ -56,7 +65,7 @@ describe('quiet-porch server', () => {
   let calls: RingCall[];
   const realFetch = globalThis.fetch;
 
-  async function start(opts: { failPost?: boolean } = {}) {
+  async function start(opts: { failPost?: boolean; frameProbe?: boolean } = {}) {
     calls = [];
     dir = mkdtempSync(join(tmpdir(), 'qp-'));
     const cfg: Config = {
@@ -66,6 +75,7 @@ describe('quiet-porch server', () => {
       hmacKey: HMAC,
       linkPassword: 'correct horse',
       accountLabel: 'owner@quiet-porch',
+      frameProbe: opts.frameProbe,
     };
     app = createApp(cfg);
     await new Promise<void>((r) => app.server.listen(0, '127.0.0.1', r));
@@ -219,6 +229,68 @@ describe('quiet-porch server', () => {
       expect((await post(payload)).status).toBe(401);
       expect((await post(payload.replace('motion', 'button'), sig)).status).toBe(401);
       expect(() => readFileSync(join(dir, 'webhook-events.jsonl'))).toThrow();
+    });
+
+    it('with the probe on, a motion event pulls the event-time frame and logs timing only', async () => {
+      app.server.close();
+      vi.unstubAllGlobals();
+      rmSync(dir, { recursive: true, force: true });
+      await start({ frameProbe: true });
+      app.store.upsert({
+        account_id: ACCOUNT,
+        access_token: 'AT-live',
+        refresh_token: 'RT',
+        scope: 'ava.v1:read',
+        issued_at: Date.now(),
+        expires_at: Date.now() + 3_600_000,
+        claimed: true,
+        integration_status: 'completed',
+      });
+      const motion = JSON.stringify({
+        meta: { request_id: 'req-m', account_id: ACCOUNT },
+        data: {
+          type: 'motion_detected',
+          attributes: { source: 'dev-1', sub_type: 'human', timestamp: 1791400319539 },
+        },
+      });
+      const msig = `sha256=${createHmac('sha256', HMAC).update(motion).digest('hex')}`;
+      expect((await post(motion, msig)).status).toBe(200);
+      const probePath = join(dir, 'frame-probe.jsonl');
+      await vi.waitFor(() => expect(() => readFileSync(probePath)).not.toThrow());
+      const rec = JSON.parse(readFileSync(probePath, 'utf8').trim());
+      expect(rec).toMatchObject({ device_id: 'dev-1', sub_type: 'human', event_ts: 1791400319539 });
+      expect(rec.attempts).toHaveLength(1);
+      expect(rec.attempts[0]).toMatchObject({ status: 200, frame_minus_event_ms: 461 });
+      const post1 = calls.find((c) => c.url.endsWith('/media/image/download'));
+      expect(JSON.parse(post1!.body!)).toMatchObject({
+        type: 'at_timestamp',
+        timestamp: 1791400319539,
+      });
+      expect(readFileSync(probePath, 'utf8')).not.toContain('AT-live');
+    });
+
+    it('with the probe off (default), a motion event makes no Ring call', async () => {
+      app.store.upsert({
+        account_id: ACCOUNT,
+        access_token: 'AT-live',
+        refresh_token: 'RT',
+        scope: 'ava.v1:read',
+        issued_at: Date.now(),
+        expires_at: Date.now() + 3_600_000,
+        claimed: true,
+        integration_status: 'completed',
+      });
+      const motion = JSON.stringify({
+        meta: { request_id: 'req-n', account_id: ACCOUNT },
+        data: {
+          type: 'motion_detected',
+          attributes: { source: 'dev-1', sub_type: 'human', timestamp: 1791400319539 },
+        },
+      });
+      const msig = `sha256=${createHmac('sha256', HMAC).update(motion).digest('hex')}`;
+      expect((await post(motion, msig)).status).toBe(200);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(calls).toHaveLength(0);
     });
 
     it('deduplicates retries by meta.request_id', async () => {

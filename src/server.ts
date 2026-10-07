@@ -12,9 +12,11 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { checkLinkFreshness, nonceMatches, verifyWebhookSignature } from './crypto.ts';
+import { createFrameProbe, parseMotionEvent } from './frame-probe.ts';
 import {
   completeIntegration,
   confirmIntegration,
+  downloadImageAt,
   exchangeCode,
   getAccountId,
   listDevices,
@@ -30,6 +32,7 @@ export interface Config {
   hmacKey: string;
   linkPassword: string;
   accountLabel: string;
+  frameProbe?: boolean; // probe at_timestamp readiness on motion webhooks (recon.md)
 }
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -116,6 +119,21 @@ export function createApp(cfg: Config) {
   const eventsPath = join(cfg.stateDir, 'webhook-events.jsonl');
   const seenRequests = new Set<string>();
   let failures: number[] = [];
+  const probePath = join(cfg.stateDir, 'frame-probe.jsonl');
+  const probe = createFrameProbe({
+    // Read the token at call time so a refresh between attempts is picked up.
+    download: (accountId, deviceId, ts) => {
+      const t = store.all().find((r) => r.account_id === accountId && r.claimed);
+      if (!t) return Promise.reject(new Error(`no linked token for ${accountId}`));
+      return downloadImageAt(t.access_token, deviceId, ts);
+    },
+    write: (record) =>
+      appendFileSync(
+        probePath,
+        `${JSON.stringify({ logged_at: new Date().toISOString(), ...record })}\n`,
+        { mode: 0o600 },
+      ),
+  });
 
   async function onTokenExchange(code: string): Promise<void> {
     try {
@@ -246,7 +264,11 @@ export function createApp(cfg: Config) {
       },
     );
     log(`webhook: ${body.data?.type ?? 'unknown'} request_id=${requestId ?? '-'}`);
-    return send(res, 200, '{"status":"processed"}');
+    send(res, 200, '{"status":"processed"}');
+    const motion = cfg.frameProbe ? parseMotionEvent(body, Date.now()) : undefined;
+    if (motion) {
+      void probe.run(motion).catch((e) => log(`frame-probe: FAILED ${(e as Error).message}`));
+    }
   }
 
   async function refreshDue(): Promise<void> {
@@ -347,6 +369,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     hmacKey: requireEnv('RING_HMAC_KEY'),
     linkPassword: requireEnv('QUIET_PORCH_LINK_PASSWORD'),
     accountLabel: process.env.QUIET_PORCH_ACCOUNT_LABEL ?? 'owner@quiet-porch',
+    frameProbe: process.env.QUIET_PORCH_FRAME_PROBE !== '0',
   };
   const { server, refreshDue } = createApp(cfg);
   server.listen(cfg.port, '127.0.0.1', () => log(`quiet-porch listening on 127.0.0.1:${cfg.port}`));

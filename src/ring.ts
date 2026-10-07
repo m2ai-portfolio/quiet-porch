@@ -112,3 +112,55 @@ export async function listDevices(accessToken: string): Promise<RingDevice[]> {
   })) as { data?: { id: string; attributes?: { name?: string } }[] };
   return (body.data ?? []).map((d) => ({ id: d.id, name: d.attributes?.name }));
 }
+
+export interface ImageAttempt {
+  status: number; // step-1 status on an error, else the step-2 (media GET) status
+  step: 1 | 2;
+  error_code?: string;
+  content_type?: string;
+  bytes?: number;
+  media_timestamp?: number;
+  media_origin?: string;
+}
+
+// Ring error bodies carry an upper-snake code such as RECORDING_NOT_READY (api-documentation.html).
+function errorCode(text: string): string | undefined {
+  return /\b[A-Z][A-Z_]{4,}[A-Z]\b/.exec(text)?.[0];
+}
+
+// POST /media/image/download with type at_timestamp, then GET the 303 Location.
+// The image bytes are counted and dropped; callers that need the frame are not built yet.
+export async function downloadImageAt(
+  accessToken: string,
+  deviceId: string,
+  timestampMs: number,
+): Promise<ImageAttempt> {
+  const r1 = await fetch(`${RING_API}/v1/devices/${deviceId}/media/image/download`, {
+    method: 'POST',
+    redirect: 'manual',
+    headers: { ...bearer(accessToken), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      type: 'at_timestamp',
+      timestamp: timestampMs,
+      image_options: { format: 'jpeg' },
+    }),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  const location = r1.headers.get('location');
+  if (!location) {
+    const text = await r1.text();
+    return { status: r1.status, step: 1, error_code: errorCode(text) };
+  }
+  const r2 = await fetch(location, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+  const buf = Buffer.from(await r2.arrayBuffer());
+  const mediaTs = Number(r2.headers.get('x-media-timestamp'));
+  return {
+    status: r2.status,
+    step: 2,
+    ...(r2.ok ? {} : { error_code: errorCode(buf.toString('utf8')) }),
+    content_type: r2.headers.get('content-type') ?? undefined,
+    bytes: buf.length,
+    media_timestamp: Number.isFinite(mediaTs) && mediaTs > 0 ? mediaTs : undefined,
+    media_origin: r2.headers.get('x-media-origin') ?? undefined,
+  };
+}
