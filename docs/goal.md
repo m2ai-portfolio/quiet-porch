@@ -14,12 +14,14 @@ source: direct (Matthew, 2026-10-07 session)
 
 ## Goal
 
-Turn Quiet Porch into a peaceful armadillo deterrent. When a Ring motion event fires at night,
+Add a nuisance-wildlife profile to Quiet Porch, with the armadillo as its test scenario, while
+keeping the plan v6 intruder ladder (see plan v7). When a Ring motion event fires at night,
 pull the frame from the moment of the event, have Bedrock confirm an armadillo, and only then
 open the sprinkler valve that covers that camera's view for at most 30 s, turn on chosen
 interior lights, play a short Rick Roll clip on a Bluetooth speaker paired to the Pi and placed
-outside, and send Matthew a Telegram message with the frame and a Stop link. People, cars,
-deliveries, pets and anything uncertain cause zero actions and are only logged. The 30 s limit is
+outside, and send Matthew a Telegram message with the frame and a Stop link. Benign events
+(family, cars, deliveries, pets) and anything uncertain cause zero actions and are only logged; a
+person never triggers the wildlife profile, only the intruder ladder. The 30 s limit is
 enforced by the valve's own duration setting, so the valve closes even if Home Assistant or
 Quiet Porch dies. Deliver it as a Devpost entry for the Amazon Developer Hackathon.
 
