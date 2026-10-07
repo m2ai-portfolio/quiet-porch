@@ -3,7 +3,9 @@
 //   - lock, cover (garage doors live here) and alarm_control_panel are rejected at load and check;
 //   - a service's class (safety vs escalation) is derived from its name, never from config;
 //   - interior media players can never take audio-producing services;
-//   - every entity must expose at least one safety service, so cleanup is always possible.
+//   - every entity must expose at least one safety service, so cleanup is always possible; a
+//     bounded setter (plan v7 section 8) instead names a cleanup_via entity that can close;
+//   - pi_audio.* entities are the Pi speaker (no HA state), checked by the same gate.
 // The Ring chime playback endpoint is not an HA service, so it has no path through this module.
 import { readFileSync } from 'node:fs';
 
@@ -17,6 +19,8 @@ export interface EntityRule {
   placement: Placement;
   zones: string[];
   services: Record<string, { params?: Record<string, ParamRule> }>;
+  // Setter only (e.g. an irrigation duration): the entity its cleanup and boot sweep act on.
+  cleanup_via?: string;
 }
 
 export interface Allowlist {
@@ -43,6 +47,15 @@ export const SAFETY_SERVICES = new Set([
   'stop',
   'cancel',
 ]);
+
+// What cleanup sends to each entity, by domain. Every value is in SAFETY_SERVICES.
+export const CLEANUP_SERVICE: Record<string, string> = {
+  light: 'turn_off',
+  switch: 'turn_off',
+  valve: 'close_valve',
+  media_player: 'media_stop',
+  pi_audio: 'stop',
+};
 
 // Sound-producing media_player services, denied on interior entities whatever config says.
 export const INTERIOR_AUDIO_DENY = new Set([
@@ -93,7 +106,12 @@ function validateRule(raw: unknown, index: number): EntityRule {
   }
   if (!r.services || typeof r.services !== 'object') throw new Error(`${at}: services missing`);
   const names = Object.keys(r.services);
-  if (!names.some((s) => SAFETY_SERVICES.has(s))) {
+  if (r.cleanup_via !== undefined) {
+    if (typeof r.cleanup_via !== 'string') throw new Error(`${at}: cleanup_via must be a string`);
+    if (names.some((s) => SAFETY_SERVICES.has(s))) {
+      throw new Error(`${at}: a setter takes no safety service; cleanup goes through cleanup_via`);
+    }
+  } else if (!names.some((s) => SAFETY_SERVICES.has(s))) {
     throw new Error(
       `${at}: needs at least one safety service (${[...SAFETY_SERVICES].join(', ')})`,
     );
@@ -120,6 +138,17 @@ export function parseAllowlist(json: unknown): Allowlist {
     if (entities.has(rule.entity_id)) throw new Error(`allowlist: duplicate ${rule.entity_id}`);
     entities.set(rule.entity_id, rule);
   });
+  for (const rule of entities.values()) {
+    if (rule.cleanup_via === undefined) continue;
+    const target = entities.get(rule.cleanup_via);
+    if (!target)
+      throw new Error(`allowlist: ${rule.entity_id} cleanup_via ${rule.cleanup_via} missing`);
+    if (!target.services.close_valve) {
+      throw new Error(
+        `allowlist: ${rule.entity_id} cleanup_via ${rule.cleanup_via} lacks close_valve`,
+      );
+    }
+  }
   return { entities };
 }
 

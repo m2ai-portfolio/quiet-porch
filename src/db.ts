@@ -3,11 +3,11 @@
 //   - events.source_event_id is UNIQUE, so a redelivered webhook cannot create a second event;
 //   - one_active_incident is a unique partial index on a constant column, so a second active
 //     incident fails at INSERT time even under concurrent openers;
-//   - action_intents is the write-ahead log; boot converts every row not marked done into an
+//   - action_intents is the write-ahead log; boot converts every row still pending into an
 //     open reconcile row before any event is accepted.
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS events (
@@ -33,44 +33,70 @@ CREATE TABLE IF NOT EXISTS incidents (
   id INTEGER PRIMARY KEY,
   singleton INTEGER NOT NULL DEFAULT 1 CHECK (singleton = 1),
   zone TEXT NOT NULL,
+  profile TEXT NOT NULL CHECK (profile IN ('intruder', 'wildlife')),
   status TEXT NOT NULL CHECK (status IN ('active', 'cancelled', 'exited')),
   level INTEGER NOT NULL DEFAULT 0 CHECK (level BETWEEN 0 AND 4),
   version INTEGER NOT NULL DEFAULT 1,
   opened_at INTEGER NOT NULL,
   closed_at INTEGER,
-  exit_reason TEXT
+  exit_reason TEXT,
+  -- intruder ladder state (plan v7 section 5); all times are frame capture times
+  dwell_start_ms INTEGER,
+  last_frame_ms INTEGER,
+  no_person_count INTEGER NOT NULL DEFAULT 0,
+  bad_evidence_count INTEGER NOT NULL DEFAULT 0,
+  last_evidence_id TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS one_active_incident ON incidents (singleton) WHERE status = 'active';
 
 CREATE TABLE IF NOT EXISTS cooldowns (
-  zone TEXT PRIMARY KEY,
-  until_ms INTEGER NOT NULL
+  zone TEXT NOT NULL,
+  profile TEXT NOT NULL CHECK (profile IN ('intruder', 'wildlife')),
+  until_ms INTEGER NOT NULL,
+  PRIMARY KEY (zone, profile)
 );
 
+-- Write-ahead log. intent_id is ours and written before dispatch; ha_context_id is only ever
+-- what HA returned for that call (plan v7 section 7), so it is nullable and never invented.
 CREATE TABLE IF NOT EXISTS action_intents (
   id INTEGER PRIMARY KEY,
+  intent_id TEXT NOT NULL UNIQUE,
   incident_id INTEGER REFERENCES incidents (id),
   entity_id TEXT NOT NULL,
   service TEXT NOT NULL,
   data TEXT NOT NULL DEFAULT '{}',
-  ha_context_id TEXT NOT NULL UNIQUE,
+  cls TEXT NOT NULL CHECK (cls IN ('safety', 'escalation')),
+  evidence_id TEXT,
+  ha_context_id TEXT UNIQUE,
   dispatched_at INTEGER NOT NULL,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'done')),
-  result TEXT
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'done', 'unknown', 'failed', 'dry_run')),
+  result TEXT,
+  completed_at INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS reconcile (
   id INTEGER PRIMARY KEY,
   entity_id TEXT NOT NULL,
   incident_id INTEGER REFERENCES incidents (id),
+  intent_id TEXT,
   action TEXT NOT NULL,
   ha_context_id TEXT,
   reason TEXT NOT NULL,
   created_at INTEGER NOT NULL,
+  next_check_ms INTEGER,
+  check_count INTEGER NOT NULL DEFAULT 0,
   resolved_at INTEGER,
   resolution TEXT CHECK (resolution IN ('context_landed_then_off', 'owner_cleared'))
 );
 CREATE INDEX IF NOT EXISTS reconcile_open ON reconcile (entity_id) WHERE resolved_at IS NULL;
+
+-- Stop links are single use (plan v7 section 8).
+CREATE TABLE IF NOT EXISTS stop_uses (
+  sig TEXT PRIMARY KEY,
+  incident_id INTEGER NOT NULL,
+  used_at INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS decisions (
   id INTEGER PRIMARY KEY,
@@ -87,9 +113,37 @@ CREATE TABLE IF NOT EXISTS decisions (
 CREATE INDEX IF NOT EXISTS decisions_by_time ON decisions (decided_at);
 `;
 
+// v2 -> v3 rebuilds the coordinator tables (incidents gain a profile and ladder state,
+// cooldowns are per profile, intents get a local intent_id). It refuses to drop rows: in v2
+// these tables were only written by tests, so a live database has none.
+const V3_REBUILT = ['stop_uses', 'reconcile', 'action_intents', 'cooldowns', 'incidents'];
+
+function migrate(db: DatabaseSync): void {
+  const version = (db.prepare('PRAGMA user_version').get() as { user_version: number })
+    .user_version;
+  if (version === 0 || version >= 3) return;
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const t of V3_REBUILT) {
+      const exists = db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+        .get(t);
+      if (!exists) continue;
+      const n = (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n;
+      if (n > 0) throw new Error(`migration v${version}->v3: ${t} has ${n} rows, refusing to drop`);
+    }
+    for (const t of V3_REBUILT) db.exec(`DROP TABLE IF EXISTS ${t}`);
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
 export function openDb(path: string): DatabaseSync {
   const db = new DatabaseSync(path);
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 3000;');
+  migrate(db);
   db.exec(SCHEMA);
   db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   return db;
@@ -117,11 +171,20 @@ export function recordEvent(
 }
 
 // Returns the new incident id, or null when another incident is already active.
-export function openIncident(db: DatabaseSync, zone: string, now = Date.now()): number | null {
+export type Profile = 'intruder' | 'wildlife';
+
+export function openIncident(
+  db: DatabaseSync,
+  zone: string,
+  profile: Profile = 'intruder',
+  now = Date.now(),
+): number | null {
   try {
     const r = db
-      .prepare("INSERT INTO incidents (zone, status, opened_at) VALUES (?, 'active', ?)")
-      .run(zone, now);
+      .prepare(
+        "INSERT INTO incidents (zone, profile, status, opened_at) VALUES (?, ?, 'active', ?)",
+      )
+      .run(zone, profile, now);
     return Number(r.lastInsertRowid);
   } catch (err) {
     if (isUniqueViolation(err)) return null;
@@ -129,12 +192,26 @@ export function openIncident(db: DatabaseSync, zone: string, now = Date.now()): 
   }
 }
 
-export function activeIncident(
-  db: DatabaseSync,
-): { id: number; zone: string; level: number; version: number } | undefined {
+export interface IncidentRow {
+  id: number;
+  zone: string;
+  profile: Profile;
+  level: number;
+  version: number;
+  opened_at: number;
+  dwell_start_ms: number | null;
+  last_frame_ms: number | null;
+  no_person_count: number;
+  bad_evidence_count: number;
+  last_evidence_id: string | null;
+}
+
+export function activeIncident(db: DatabaseSync): IncidentRow | undefined {
   return db
-    .prepare("SELECT id, zone, level, version FROM incidents WHERE status = 'active'")
-    .get() as { id: number; zone: string; level: number; version: number } | undefined;
+    .prepare(
+      "SELECT id, zone, profile, level, version, opened_at, dwell_start_ms, last_frame_ms, no_person_count, bad_evidence_count, last_evidence_id FROM incidents WHERE status = 'active'",
+    )
+    .get() as IncidentRow | undefined;
 }
 
 export function closeIncident(
@@ -149,54 +226,109 @@ export function closeIncident(
   ).run(status, reason, now, id);
 }
 
-export function recordIntent(
-  db: DatabaseSync,
-  i: {
-    incidentId: number | null;
-    entityId: string;
-    service: string;
-    data?: unknown;
-    haContextId: string;
-  },
-  now = Date.now(),
-): number {
+export interface IntentInput {
+  intentId: string;
+  incidentId: number | null;
+  entityId: string;
+  service: string;
+  data?: unknown;
+  cls: 'safety' | 'escalation';
+  evidenceId?: string;
+}
+
+export function recordIntent(db: DatabaseSync, i: IntentInput, now = Date.now()): number {
   const r = db
     .prepare(
-      'INSERT INTO action_intents (incident_id, entity_id, service, data, ha_context_id, dispatched_at) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO action_intents (intent_id, incident_id, entity_id, service, data, cls, evidence_id, dispatched_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     )
-    .run(i.incidentId, i.entityId, i.service, JSON.stringify(i.data ?? {}), i.haContextId, now);
+    .run(
+      i.intentId,
+      i.incidentId,
+      i.entityId,
+      i.service,
+      JSON.stringify(i.data ?? {}),
+      i.cls,
+      i.evidenceId ?? null,
+      now,
+    );
   return Number(r.lastInsertRowid);
 }
 
-export function markIntentDone(db: DatabaseSync, id: number, result: string): void {
-  db.prepare("UPDATE action_intents SET status = 'done', result = ? WHERE id = ?").run(result, id);
+export function completeIntent(
+  db: DatabaseSync,
+  intentId: string,
+  status: 'done' | 'unknown' | 'failed' | 'dry_run',
+  result: string,
+  haContextId?: string,
+  now = Date.now(),
+): void {
+  db.prepare(
+    "UPDATE action_intents SET status = ?, result = ?, ha_context_id = ?, completed_at = ? WHERE intent_id = ? AND status = 'pending'",
+  ).run(status, result, haContextId ?? null, now, intentId);
 }
 
-// Boot step: every intent never confirmed becomes an open reconcile row. One transaction, so a
-// crash here leaves either all intents pending or all converted.
+export function openReconcile(
+  db: DatabaseSync,
+  r: {
+    entityId: string;
+    incidentId: number | null;
+    intentId?: string;
+    action: string;
+    haContextId?: string;
+    reason: string;
+  },
+  now = Date.now(),
+): number {
+  const res = db
+    .prepare(
+      'INSERT INTO reconcile (entity_id, incident_id, intent_id, action, ha_context_id, reason, created_at, next_check_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    )
+    .run(
+      r.entityId,
+      r.incidentId,
+      r.intentId ?? null,
+      r.action,
+      r.haContextId ?? null,
+      r.reason,
+      now,
+      now,
+    );
+  return Number(res.lastInsertRowid);
+}
+
+// Boot step: every intent still pending (dispatched, outcome never recorded) becomes an open
+// reconcile row with outcome unknown. One transaction, so a crash here leaves either all
+// intents pending or all converted. dry_run intents never touched hardware and are skipped.
 export function convertPendingIntents(db: DatabaseSync, now = Date.now()): number {
   db.exec('BEGIN IMMEDIATE');
   try {
     const pending = db
       .prepare(
-        "SELECT id, incident_id, entity_id, service, ha_context_id FROM action_intents WHERE status = 'pending'",
+        "SELECT intent_id, incident_id, entity_id, service, ha_context_id FROM action_intents WHERE status = 'pending'",
       )
       .all() as {
-      id: number;
+      intent_id: string;
       incident_id: number | null;
       entity_id: string;
       service: string;
-      ha_context_id: string;
+      ha_context_id: string | null;
     }[];
-    const insert = db.prepare(
-      "INSERT INTO reconcile (entity_id, incident_id, action, ha_context_id, reason, created_at) VALUES (?, ?, ?, ?, 'unconfirmed_intent_at_boot', ?)",
-    );
-    const done = db.prepare(
-      "UPDATE action_intents SET status = 'done', result = 'converted_to_reconcile' WHERE id = ?",
-    );
     for (const p of pending) {
-      insert.run(p.entity_id, p.incident_id, p.service, p.ha_context_id, now);
-      done.run(p.id);
+      openReconcile(
+        db,
+        {
+          entityId: p.entity_id,
+          incidentId: p.incident_id,
+          intentId: p.intent_id,
+          action: p.service,
+          haContextId: p.ha_context_id ?? undefined,
+          reason: 'unconfirmed_intent_at_boot',
+        },
+        now,
+      );
+      db.prepare(
+        "UPDATE action_intents SET status = 'unknown', result = 'converted_to_reconcile', completed_at = ? WHERE intent_id = ?",
+      ).run(now, p.intent_id);
     }
     db.exec('COMMIT');
     return pending.length;

@@ -120,3 +120,57 @@ describe('checkAction', () => {
     });
   });
 });
+
+describe('bounded setters and pi_audio (plan v7 section 8)', () => {
+  const valve = {
+    entity_id: 'valve.front_yard_sprinkler_valve',
+    placement: 'exterior',
+    zones: ['front_yard'],
+    services: { open_valve: {}, close_valve: {} },
+  };
+  const setter = (over: Record<string, unknown> = {}) => ({
+    entity_id: 'number.front_yard_sprinkler_irrigation_duration',
+    placement: 'exterior',
+    zones: ['front_yard'],
+    services: { set_value: { params: { value: { min: 5, max: 30 } } } },
+    cleanup_via: 'valve.front_yard_sprinkler_valve',
+    ...over,
+  });
+
+  it('a setter without cleanup_via fails to load (no safety service)', () => {
+    expect(() => parseAllowlist({ entities: [valve, setter({ cleanup_via: undefined })] })).toThrow(
+      /safety service/,
+    );
+  });
+  it('a setter whose cleanup_via is missing or cannot close fails to load', () => {
+    expect(() => parseAllowlist({ entities: [setter()] })).toThrow(/missing/);
+    const noClose = { ...valve, services: { open_valve: {}, turn_off: {} } };
+    expect(() => parseAllowlist({ entities: [noClose, setter()] })).toThrow(/lacks close_valve/);
+  });
+  it('set_value is bounded to 5..30 and is an escalation command', () => {
+    const a = parseAllowlist({ entities: [valve, setter()] });
+    const req = (value: number) => ({
+      entity_id: 'number.front_yard_sprinkler_irrigation_duration',
+      service: 'set_value',
+      data: { value },
+    });
+    expect(checkAction(a, req(30))).toEqual({ ok: true, cls: 'escalation' });
+    expect(checkAction(a, req(31)).ok).toBe(false);
+    expect(classOf('set_value')).toBe('escalation');
+  });
+  it('the shipped allowlist loads; pi_audio rejects a clip outside its enum', () => {
+    const shipped = loadAllowlist(new URL('../config/allowlist.json', import.meta.url).pathname);
+    const play = (clip: string) =>
+      checkAction(shipped, {
+        entity_id: 'pi_audio.porch_speaker',
+        service: 'play_clip',
+        data: { clip },
+      });
+    expect(play('bark-5s')).toEqual({ ok: true, cls: 'escalation' });
+    expect(play('never-gonna').ok).toBe(false);
+    expect(checkAction(shipped, { entity_id: 'pi_audio.porch_speaker', service: 'stop' })).toEqual({
+      ok: true,
+      cls: 'safety',
+    });
+  });
+});

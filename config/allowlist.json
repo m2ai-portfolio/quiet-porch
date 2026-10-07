@@ -1,0 +1,32 @@
+{
+  "entities": [
+    {
+      "entity_id": "valve.front_yard_sprinkler_valve",
+      "placement": "exterior",
+      "zones": ["front_yard"],
+      "services": { "open_valve": {}, "close_valve": {} }
+    },
+    {
+      "entity_id": "number.front_yard_sprinkler_irrigation_duration",
+      "placement": "exterior",
+      "zones": ["front_yard"],
+      "services": { "set_value": { "params": { "value": { "min": 5, "max": 30 } } } },
+      "cleanup_via": "valve.front_yard_sprinkler_valve"
+    },
+    {
+      "entity_id": "switch.patio_light_socket_1",
+      "placement": "exterior",
+      "zones": ["front_yard"],
+      "services": { "turn_on": {}, "turn_off": {} }
+    },
+    {
+      "entity_id": "pi_audio.porch_speaker",
+      "placement": "exterior",
+      "zones": ["front_yard"],
+      "services": {
+        "play_clip": { "params": { "clip": { "enum": ["bark-5s", "wildlife"] } } },
+        "stop": {}
+      }
+    }
+  ]
+}

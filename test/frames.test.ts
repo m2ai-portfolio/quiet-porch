@@ -99,7 +99,9 @@ describe('acquireEventFrame', () => {
       clock(),
     );
     expect(frame).toBeUndefined();
-    expect(record.attempts.map((a) => a.offset_ms)).toEqual([0, 2000, 5000, 8000, 12000, 16000, 20000]);
+    expect(record.attempts.map((a) => a.offset_ms)).toEqual([
+      0, 2000, 5000, 8000, 12000, 16000, 20000,
+    ]);
     expect(record.ready_after_event_ms).toBeUndefined();
   });
 
