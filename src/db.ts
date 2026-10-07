@@ -7,7 +7,7 @@
 //     open reconcile row before any event is accepted.
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS events (
@@ -71,6 +71,20 @@ CREATE TABLE IF NOT EXISTS reconcile (
   resolution TEXT CHECK (resolution IN ('context_landed_then_off', 'owner_cleared'))
 );
 CREATE INDEX IF NOT EXISTS reconcile_open ON reconcile (entity_id) WHERE resolved_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS decisions (
+  id INTEGER PRIMARY KEY,
+  source_event_id TEXT NOT NULL,
+  evidence_id TEXT REFERENCES evidence (evidence_id),
+  zone TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('reject', 'log', 'intruder', 'wildlife', 'no_evidence', 'killed')),
+  reason TEXT NOT NULL,
+  perception TEXT,
+  critique TEXT,
+  dry_run INTEGER NOT NULL CHECK (dry_run IN (0, 1)),
+  decided_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS decisions_by_time ON decisions (decided_at);
 `;
 
 export function openDb(path: string): DatabaseSync {
@@ -197,4 +211,48 @@ export function openReconcileEntities(db: DatabaseSync): Set<string> {
     .prepare('SELECT DISTINCT entity_id FROM reconcile WHERE resolved_at IS NULL')
     .all() as { entity_id: string }[];
   return new Set(rows.map((r) => r.entity_id));
+}
+
+export function recordEvidence(
+  db: DatabaseSync,
+  e: { evidenceId: string; zone: string; source: string; captureTs: number; imageSha256: string },
+  now = Date.now(),
+): void {
+  db.prepare(
+    'INSERT OR IGNORE INTO evidence (evidence_id, zone, source, capture_ts, image_sha256, received_at) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run(e.evidenceId, e.zone, e.source, e.captureTs, e.imageSha256, now);
+}
+
+export type DecisionKind = 'reject' | 'log' | 'intruder' | 'wildlife' | 'no_evidence' | 'killed';
+
+export function recordDecision(
+  db: DatabaseSync,
+  d: {
+    sourceEventId: string;
+    evidenceId?: string;
+    zone: string;
+    kind: DecisionKind;
+    reason: string;
+    perception?: unknown;
+    critique?: unknown;
+    dryRun: boolean;
+  },
+  now = Date.now(),
+): number {
+  const r = db
+    .prepare(
+      'INSERT INTO decisions (source_event_id, evidence_id, zone, kind, reason, perception, critique, dry_run, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    )
+    .run(
+      d.sourceEventId,
+      d.evidenceId ?? null,
+      d.zone,
+      d.kind,
+      d.reason,
+      d.perception === undefined ? null : JSON.stringify(d.perception),
+      d.critique === undefined ? null : JSON.stringify(d.critique),
+      d.dryRun ? 1 : 0,
+      now,
+    );
+  return Number(r.lastInsertRowid);
 }

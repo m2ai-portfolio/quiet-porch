@@ -121,6 +121,7 @@ export interface ImageAttempt {
   bytes?: number;
   media_timestamp?: number;
   media_origin?: string;
+  image?: Buffer; // only when keepImage is set and the download succeeded
 }
 
 // Ring error bodies carry an upper-snake code such as RECORDING_NOT_READY (api-documentation.html).
@@ -129,11 +130,12 @@ function errorCode(text: string): string | undefined {
 }
 
 // POST /media/image/download with type at_timestamp, then GET the 303 Location.
-// The image bytes are counted and dropped; callers that need the frame are not built yet.
+// The image bytes are counted, and kept only when the caller asks for them.
 export async function downloadImageAt(
   accessToken: string,
   deviceId: string,
   timestampMs: number,
+  opts: { keepImage?: boolean } = {},
 ): Promise<ImageAttempt> {
   const r1 = await fetch(`${RING_API}/v1/devices/${deviceId}/media/image/download`, {
     method: 'POST',
@@ -162,5 +164,6 @@ export async function downloadImageAt(
     bytes: buf.length,
     media_timestamp: Number.isFinite(mediaTs) && mediaTs > 0 ? mediaTs : undefined,
     media_origin: r2.headers.get('x-media-origin') ?? undefined,
+    ...(opts.keepImage && r2.ok ? { image: buf } : {}),
   };
 }

@@ -6,13 +6,16 @@
 //   2. Ring redirects the browser to /link?nonce=..&time=..; the owner signs in (mandatory).
 //   3. We match the nonce against unclaimed tokens, then POST + PATCH app-integrations.
 // Webhooks arrive at /webhook signed with X-Signature: sha256=<hex HMAC of the raw body>.
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { checkLinkFreshness, nonceMatches, verifyWebhookSignature } from './crypto.ts';
-import { createFrameProbe, parseMotionEvent } from './frame-probe.ts';
+import { bedrockConfigFromEnv, converse, type ContentBlock } from './bedrock.ts';
+import { openDb } from './db.ts';
+import { parseMotionEvent } from './frames.ts';
+import { createPipeline, parsePipelineConfig, type PipelineConfig } from './pipeline.ts';
 import {
   completeIntegration,
   confirmIntegration,
@@ -32,7 +35,8 @@ export interface Config {
   hmacKey: string;
   linkPassword: string;
   accountLabel: string;
-  frameProbe?: boolean; // probe at_timestamp readiness on motion webhooks (recon.md)
+  // Dry-run decision pipeline (plan v7 step 2). Absent: webhooks are only logged.
+  pipeline?: { config: PipelineConfig; converse: (content: ContentBlock[]) => Promise<string> };
 }
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -119,21 +123,34 @@ export function createApp(cfg: Config) {
   const eventsPath = join(cfg.stateDir, 'webhook-events.jsonl');
   const seenRequests = new Set<string>();
   let failures: number[] = [];
-  const probePath = join(cfg.stateDir, 'frame-probe.jsonl');
-  const probe = createFrameProbe({
-    // Read the token at call time so a refresh between attempts is picked up.
-    download: (accountId, deviceId, ts) => {
-      const t = store.all().find((r) => r.account_id === accountId && r.claimed);
-      if (!t) return Promise.reject(new Error(`no linked token for ${accountId}`));
-      return downloadImageAt(t.access_token, deviceId, ts);
-    },
-    write: (record) =>
-      appendFileSync(
-        probePath,
-        `${JSON.stringify({ logged_at: new Date().toISOString(), ...record })}\n`,
-        { mode: 0o600 },
-      ),
-  });
+  const jsonl = (file: string) => (rec: object) =>
+    appendFileSync(
+      join(cfg.stateDir, file),
+      `${JSON.stringify({ logged_at: new Date().toISOString(), ...rec })}\n`,
+      { mode: 0o600 },
+    );
+  const pipeline = cfg.pipeline
+    ? createPipeline(cfg.pipeline.config, {
+        db: openDb(join(cfg.stateDir, 'quiet-porch.db')),
+        // Read the token at call time so a refresh between attempts is picked up.
+        download: (accountId, deviceId, ts, opts) => {
+          const t = store.all().find((r) => r.account_id === accountId && r.claimed);
+          if (!t) return Promise.reject(new Error(`no linked token for ${accountId}`));
+          return downloadImageAt(t.access_token, deviceId, ts, opts);
+        },
+        converse: cfg.pipeline.converse,
+        killed: () => existsSync(join(cfg.stateDir, 'KILL')),
+        writeProbe: jsonl('frame-probe.jsonl'),
+        writeDecision: (r) => {
+          jsonl('decisions.jsonl')(r);
+          log(`decision: ${r.kind} ${r.reason} zone=${r.zone}${r.would ? ` (${r.would})` : ''}`);
+        },
+        saveFrame: (evidenceId, jpeg) => {
+          mkdirSync(join(cfg.stateDir, 'frames'), { recursive: true, mode: 0o700 });
+          writeFileSync(join(cfg.stateDir, 'frames', `${evidenceId}.jpg`), jpeg, { mode: 0o600 });
+        },
+      })
+    : undefined;
 
   async function onTokenExchange(code: string): Promise<void> {
     try {
@@ -265,9 +282,11 @@ export function createApp(cfg: Config) {
     );
     log(`webhook: ${body.data?.type ?? 'unknown'} request_id=${requestId ?? '-'}`);
     send(res, 200, '{"status":"processed"}');
-    const motion = cfg.frameProbe ? parseMotionEvent(body, Date.now()) : undefined;
-    if (motion) {
-      void probe.run(motion).catch((e) => log(`frame-probe: FAILED ${(e as Error).message}`));
+    const motion = pipeline ? parseMotionEvent(body, Date.now()) : undefined;
+    if (pipeline && motion) {
+      void pipeline
+        .handle(motion, body)
+        .catch((e) => log(`pipeline: FAILED ${(e as Error).message}`));
     }
   }
 
@@ -369,8 +388,17 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     hmacKey: requireEnv('RING_HMAC_KEY'),
     linkPassword: requireEnv('QUIET_PORCH_LINK_PASSWORD'),
     accountLabel: process.env.QUIET_PORCH_ACCOUNT_LABEL ?? 'owner@quiet-porch',
-    frameProbe: process.env.QUIET_PORCH_FRAME_PROBE !== '0',
   };
+  const configPath =
+    process.env.QUIET_PORCH_CONFIG ?? join(import.meta.dirname, '../config/quiet-porch.json');
+  if (process.env.QUIET_PORCH_PIPELINE !== '0' && existsSync(configPath)) {
+    const bedrock = bedrockConfigFromEnv();
+    cfg.pipeline = {
+      config: parsePipelineConfig(JSON.parse(readFileSync(configPath, 'utf8'))),
+      converse: async (content) => (await converse(bedrock, content)).text,
+    };
+    log(`pipeline: dry run enabled from ${configPath}`);
+  }
   const { server, refreshDue } = createApp(cfg);
   server.listen(cfg.port, '127.0.0.1', () => log(`quiet-porch listening on 127.0.0.1:${cfg.port}`));
   setInterval(() => void refreshDue(), 60_000);

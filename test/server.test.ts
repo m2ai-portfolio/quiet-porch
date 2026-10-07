@@ -17,7 +17,7 @@ interface RingCall {
 }
 
 // Fake Ring: records every outbound call and answers like the documented endpoints.
-function fakeRing(calls: RingCall[], opts: { failPost?: boolean; frameProbe?: boolean } = {}) {
+function fakeRing(calls: RingCall[], opts: { failPost?: boolean; pipeline?: boolean } = {}) {
   return vi.fn(async (input: string | URL, init?: RequestInit) => {
     const url = String(input);
     const method = init?.method ?? 'GET';
@@ -48,7 +48,11 @@ function fakeRing(calls: RingCall[], opts: { failPost?: boolean; frameProbe?: bo
     if (url === 'https://media.test/f1') {
       return new Response(new Uint8Array(4), {
         status: 200,
-        headers: { 'X-Media-Timestamp': '1791400320000', 'X-Media-Origin': 'recording' },
+        headers: {
+          'Content-Type': 'image/jpeg',
+          'X-Media-Timestamp': '1791400320000',
+          'X-Media-Origin': 'recording',
+        },
       });
     }
     if (url.endsWith('/v1/devices')) {
@@ -65,7 +69,7 @@ describe('quiet-porch server', () => {
   let calls: RingCall[];
   const realFetch = globalThis.fetch;
 
-  async function start(opts: { failPost?: boolean; frameProbe?: boolean } = {}) {
+  async function start(opts: { failPost?: boolean; pipeline?: boolean } = {}) {
     calls = [];
     dir = mkdtempSync(join(tmpdir(), 'qp-'));
     const cfg: Config = {
@@ -75,7 +79,34 @@ describe('quiet-porch server', () => {
       hmacKey: HMAC,
       linkPassword: 'correct horse',
       accountLabel: 'owner@quiet-porch',
-      frameProbe: opts.frameProbe,
+      ...(opts.pipeline
+        ? {
+            pipeline: {
+              config: {
+                dryRun: true as const,
+                timezone: 'America/Chicago',
+                nightWindow: { start: '20:00', end: '06:30' },
+                zones: { 'dev-1': 'front_yard' },
+                context: {
+                  mode: 'home' as const,
+                  knownPets: [],
+                  expectedVisitors: [],
+                  routines: [],
+                  nuisanceSpecies: ['armadillo'],
+                },
+                followUpProbe: false,
+              },
+              converse: async () =>
+                JSON.stringify({
+                  evidence_id: 'x',
+                  subjects: [],
+                  person_present: false,
+                  activity: '',
+                  night_ir: false,
+                }),
+            },
+          }
+        : {}),
     };
     app = createApp(cfg);
     await new Promise<void>((r) => app.server.listen(0, '127.0.0.1', r));
@@ -231,11 +262,11 @@ describe('quiet-porch server', () => {
       expect(() => readFileSync(join(dir, 'webhook-events.jsonl'))).toThrow();
     });
 
-    it('with the probe on, a motion event pulls the event-time frame and logs timing only', async () => {
+    it('with the pipeline on, a motion event pulls the event-time frame and records a decision', async () => {
       app.server.close();
       vi.unstubAllGlobals();
       rmSync(dir, { recursive: true, force: true });
-      await start({ frameProbe: true });
+      await start({ pipeline: true });
       app.store.upsert({
         account_id: ACCOUNT,
         access_token: 'AT-live',
@@ -267,9 +298,19 @@ describe('quiet-porch server', () => {
         timestamp: 1791400319539,
       });
       expect(readFileSync(probePath, 'utf8')).not.toContain('AT-live');
+      // The fake model echoes the wrong evidence_id, so the decision is a reject, never an action.
+      const decPath = join(dir, 'decisions.jsonl');
+      await vi.waitFor(() => expect(() => readFileSync(decPath)).not.toThrow());
+      const dec = JSON.parse(readFileSync(decPath, 'utf8').trim());
+      expect(dec).toMatchObject({
+        zone: 'front_yard',
+        kind: 'reject',
+        reason: 'perception_evidence_id_mismatch',
+        dry_run: true,
+      });
     });
 
-    it('with the probe off (default), a motion event makes no Ring call', async () => {
+    it('with the pipeline off (default), a motion event makes no Ring call', async () => {
       app.store.upsert({
         account_id: ACCOUNT,
         access_token: 'AT-live',

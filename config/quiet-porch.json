@@ -1,0 +1,17 @@
+{
+  "dryRun": true,
+  "timezone": "America/Chicago",
+  "nightWindow": { "start": "20:00", "end": "06:30" },
+  "zones": {
+    "ava1.ring.device.FRONT_DOOR": "front_door",
+    "ava1.ring.device.RING_CAM_1": "front_yard"
+  },
+  "context": {
+    "mode": "home",
+    "knownPets": [],
+    "expectedVisitors": ["package and mail deliveries during the day"],
+    "routines": ["household members come and go through the front door"],
+    "nuisanceSpecies": ["armadillo"]
+  },
+  "followUpProbe": true
+}
