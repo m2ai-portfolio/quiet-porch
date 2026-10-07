@@ -40,8 +40,9 @@ before the user is redirected to the Account Link URL.
 - **Verified:** granted scope is `ava.v1:read` (read-only).
 - **Verified:** access token lifetime is 14400 s (4 h), from `expires_at - issued_at` in
   `tokens.json`.
-- **Open:** whether the refresh loop renews real tokens. First renewal is due before
-  2026-10-06 20:28 CDT; check for `refresh: renewed` in the journal.
+- **Verified:** the refresh loop renewed real tokens at 2026-10-06 19:29:12 CDT (75% of the
+  4 h lifetime). New tokens: issued 19:29:12, expire 23:29:12, status still `completed`. This is
+  a natural renewal, not the plan's forced-expiry test.
 - **Open:** request content type (JSON vs form). `parseFields` handles both and does not log which.
 
 ## Account link nonce
@@ -105,8 +106,15 @@ Account: `ava1.ring.account.REDACTED`
 
 ### Still open in the step 1c gate
 
-Signed `motion_detected` webhook, live-stream frame (WHEP/RTSPS), forced-expiry refresh, HA
-`quiet-porch` user, exterior actuators.
+Live-stream frame (WHEP/RTSPS), forced-expiry refresh test, HA `quiet-porch` user, exterior
+actuators.
+
+### Signed motion webhooks (step 1c, first half)
+
+**Verified:** 6 signed `motion_detected` webhooks on `/ring/webhook` between 18:05 and 18:57 CDT
+on 2026-10-06, 0 rejected. Attributes are exactly `source`, `source_type`, `timestamp`,
+`sub_type`. Front Door sent `sub_type: motion` once; Ring Cam 1 sent `sub_type: human` five
+times. No frame was pulled for these events.
 
 ## Service state
 
