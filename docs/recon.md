@@ -139,3 +139,21 @@ times. No frame was pulled for these events.
 
 - `quiet-porch.service` (systemd --user) enabled at boot on 2026-10-06; linger is on.
 - Funnel `/ring` proxies to `http://127.0.0.1:3460` and is stored in tailscaled's serve config.
+
+## Outdoor speaker on rpi-claw, verified 2026-10-07 15:10 CDT
+
+- Anker SoundCore `08:EB:ED:87:2E:8F` is bonded (LinkKey stored) and is the default PipeWire
+  sink `bluez_output.08:EB:ED:87:2E:8F`. A 440 Hz tone played and was heard (Matthew).
+- The first pairing was made with the adapter `Pairable: no`, so BlueZ kept no key and a reboot
+  forgot the device. Re-paired with `pairable on`; the bond now survives reboots.
+- The GDM greeter's own WirePlumber held the BlueZ endpoints, so rpi-claw's stack got
+  `RegisterProfile() failed: NotPermitted` and only a Dummy Output. Fix: Pi boots to
+  `multi-user.target` (undo: `sudo systemctl set-default graphical.target`).
+- rpi-claw user changes: linger on, `~/.config/wireplumber/wireplumber.conf.d/80-headless-bluez.conf`
+  (`monitor.bluez.seat-monitoring = disabled`).
+- Neither the Pi nor the speaker initiates a reconnect after a reboot or a speaker power-cycle.
+  `anker-reconnect.service` (systemd --user, `~/.local/bin/anker-reconnect.sh`) runs
+  `bluetoothctl connect` every 15 s while disconnected. Reboot plus power-cycle test: reconnected
+  about 2 min after boot, default sink restored, tone played.
+- Sink volume is 0.69. A `wpctl set-volume` on node 59 hit the internal node, not the sink.
+- **Open:** Home Assistant cannot play to this speaker yet; playback today is `pw-play` on the Pi.
