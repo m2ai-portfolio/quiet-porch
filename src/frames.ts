@@ -7,7 +7,9 @@
 // Each event writes one ProbeRecord (status and timing only, never image bytes).
 import type { ImageAttempt } from './ring.ts';
 
-export const PROBE_OFFSETS_MS = [0, 2000, 5000];
+// Event-frame attempts. Live readiness ranged 1.9 s to more than 5 s (10-07 21:05Z event:
+// 416 at +0, +2, +5 s; recording at +10 s), so retries run out to +12 s.
+export const PROBE_OFFSETS_MS = [0, 2000, 5000, 8000, 12000];
 export const FOLLOW_UP_OFFSETS_MS = [5000, 10000, 15000];
 export const FOLLOW_UP_LOOKBACK_MS = 2000;
 export const EVENT_FRAME_TOLERANCE_MS = 1000;

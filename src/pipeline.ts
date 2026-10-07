@@ -169,6 +169,7 @@ export async function judgeFrame(
     perception: perc.result,
     critique: crit?.result,
     nuisanceSpecies: species,
+    mode: cfg.context.mode,
     inNightWindow:
       inNightWindowOverride ??
       inWindow(captureTs, cfg.nightWindow.start, cfg.nightWindow.end, cfg.timezone),

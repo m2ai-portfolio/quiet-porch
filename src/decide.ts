@@ -3,7 +3,9 @@
 //   1. invalid or contradictory evidence -> reject (no action);
 //   2. any uncertain person evidence -> log (no action, no notification);
 //   3. critique benign or uncertain -> log, whatever the perception confidence;
-//   4. a detected person can only reach the intruder profile, never wildlife;
+//   4. a detected person can only reach the intruder profile, never wildlife, and only in
+//      mode away or night or inside the night window (a daytime visitor in mode home is
+//      logged: Matthew, 2026-10-07);
 //   5. wildlife needs no person signal, a configured species >= 0.80, verdict exactly
 //      "nuisance", and the night window.
 import type { Critique } from './critique.ts';
@@ -34,6 +36,7 @@ export function decide(input: {
   critique?: Validated<Critique>;
   nuisanceSpecies: string[];
   inNightWindow: boolean;
+  mode: 'home' | 'away' | 'night';
 }): Decision {
   if (!input.perception.ok)
     return { kind: 'reject', reason: `perception_${input.perception.reason}` };
@@ -54,6 +57,8 @@ export function decide(input: {
 
   if (pe.detected) {
     if (c.verdict === 'unknown' || c.verdict === 'suspicious') {
+      if (input.mode === 'home' && !input.inNightWindow)
+        return { kind: 'log', reason: `person_${c.verdict}_daytime_home` };
       return { kind: 'intruder', reason: `person_${c.verdict}` };
     }
     return { kind: 'log', reason: `person_with_verdict_${c.verdict}` };

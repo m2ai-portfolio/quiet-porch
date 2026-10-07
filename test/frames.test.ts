@@ -99,8 +99,20 @@ describe('acquireEventFrame', () => {
       clock(),
     );
     expect(frame).toBeUndefined();
-    expect(record.attempts.map((a) => a.offset_ms)).toEqual([0, 2000, 5000]);
+    expect(record.attempts.map((a) => a.offset_ms)).toEqual([0, 2000, 5000, 8000, 12000]);
     expect(record.ready_after_event_ms).toBeUndefined();
+  });
+
+  it('waits past +5 s: a recording that first appears at +8 s is still the event frame', async () => {
+    const answers: ImageAttempt[] = [
+      { status: 416, step: 2, error_code: 'MEDIA_NOT_FOUND' },
+      { status: 416, step: 2, error_code: 'MEDIA_NOT_FOUND' },
+      { status: 416, step: 2, error_code: 'MEDIA_NOT_FOUND' },
+      good(0),
+    ];
+    const { frame, record } = await acquireEventFrame(ev, async () => answers.shift()!, clock());
+    expect(frame?.origin).toBe('recording');
+    expect(record.attempts.map((a) => a.offset_ms)).toEqual([0, 2000, 5000, 8000]);
   });
 
   it('records a network error as status 0 and keeps going', async () => {

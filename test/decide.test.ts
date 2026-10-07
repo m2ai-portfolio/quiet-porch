@@ -16,12 +16,18 @@ const crit = (verdict: Critique['verdict']): Critique => ({
   verdict,
   reasons: [],
 });
-const run = (p: Perception, c?: Critique['verdict'], night = true) =>
+const run = (
+  p: Perception,
+  c?: Critique['verdict'],
+  night = true,
+  mode: 'home' | 'away' | 'night' = 'home',
+) =>
   decide({
     perception: { ok: true, value: p },
     critique: c ? { ok: true, value: crit(c) } : undefined,
     nuisanceSpecies: ['armadillo'],
     inNightWindow: night,
+    mode,
   });
 
 describe('decide: people', () => {
@@ -32,6 +38,24 @@ describe('decide: people', () => {
     expect(run(perc([{ class: 'person', confidence: 0.95 }], true), 'suspicious').kind).toBe(
       'intruder',
     );
+  });
+
+  it('a daytime unknown or suspicious person in mode home is logged, not L1', () => {
+    const person = perc([{ class: 'person', confidence: 0.95 }], true);
+    expect(run(person, 'unknown', false, 'home')).toEqual({
+      kind: 'log',
+      reason: 'person_unknown_daytime_home',
+    });
+    expect(run(person, 'suspicious', false, 'home')).toEqual({
+      kind: 'log',
+      reason: 'person_suspicious_daytime_home',
+    });
+  });
+
+  it('the same daytime person reaches intruder in mode away or night', () => {
+    const person = perc([{ class: 'person', confidence: 0.95 }], true);
+    expect(run(person, 'unknown', false, 'away').kind).toBe('intruder');
+    expect(run(person, 'unknown', false, 'night').kind).toBe('intruder');
   });
 
   it('a 0.65 person is uncertain: logged, whatever the critique says', () => {
@@ -89,6 +113,7 @@ describe('decide: contradictions and bad evidence', () => {
         perception: { ok: false, reason: 'evidence_id_mismatch' },
         nuisanceSpecies: [],
         inNightWindow: true,
+        mode: 'home',
       }),
     ).toEqual({ kind: 'reject', reason: 'perception_evidence_id_mismatch' });
     expect(
@@ -97,6 +122,7 @@ describe('decide: contradictions and bad evidence', () => {
         critique: { ok: false, reason: 'bad_verdict' },
         nuisanceSpecies: ['armadillo'],
         inNightWindow: true,
+        mode: 'home',
       }).kind,
     ).toBe('reject');
   });
@@ -108,6 +134,7 @@ describe('decide: contradictions and bad evidence', () => {
         critique: { ok: true, value: { ...crit('nuisance'), evidence_id: 'ev_other' } },
         nuisanceSpecies: ['armadillo'],
         inNightWindow: true,
+        mode: 'home',
       }).kind,
     ).toBe('reject');
   });
