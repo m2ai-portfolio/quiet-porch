@@ -1,7 +1,10 @@
 {
   "dryRun": true,
   "timezone": "America/Chicago",
-  "nightWindow": { "start": "20:00", "end": "06:30" },
+  "nightWindow": {
+    "start": "20:00",
+    "end": "06:30"
+  },
   "zones": {
     "ava1.ring.device.FRONT_DOOR": "front_door",
     "ava1.ring.device.RING_CAM_1": "front_yard"
@@ -9,9 +12,35 @@
   "context": {
     "mode": "home",
     "knownPets": [],
-    "expectedVisitors": ["package and mail deliveries during the day"],
-    "routines": ["household members come and go through the front door"],
-    "nuisanceSpecies": ["armadillo"]
+    "expectedVisitors": [
+      "package and mail deliveries during the day"
+    ],
+    "routines": [
+      "household members come and go through the front door"
+    ],
+    "nuisanceSpecies": [
+      "armadillo"
+    ]
   },
-  "followUpProbe": true
+  "followUpProbe": true,
+  "coordinator": {
+    "allowlist": "config/allowlist.json",
+    "publicBase": "https://quiet-porch.example.ts.net/ring",
+    "maxIntruderLevel": 1,
+    "cooldownMs": 600000,
+    "ownerUserIds": [],
+    "interiorLights": [],
+    "zones": {
+      "front_yard": {
+        "exteriorLight": "switch.patio_light_socket_1",
+        "valve": "valve.front_yard_sprinkler_valve",
+        "durationSetter": "number.front_yard_sprinkler_irrigation_duration",
+        "speaker": "pi_audio.porch_speaker"
+      }
+    },
+    "clips": {
+      "bark": "bark-5s",
+      "wildlife": "wildlife"
+    }
+  }
 }

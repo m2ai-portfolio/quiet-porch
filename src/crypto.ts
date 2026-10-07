@@ -43,3 +43,30 @@ export function checkLinkFreshness(timeParam: string, nowMs: number): Freshness 
   if (deltaSeconds > NONCE_WINDOW_SECONDS) return { ok: false, reason: 'expired' };
   return { ok: true };
 }
+
+// Stop links (plan v7 section 8): GET /ring/stop?i=<incident>&exp=<epoch ms>&sig=<hmac>.
+// Incident-scoped and expiring; single use is enforced by the stop_uses table.
+export const STOP_LINK_TTL_MS = 15 * 60_000;
+
+export function signStop(key: string, incidentId: number, expMs: number): string {
+  return createHmac('sha256', key).update(`stop|${incidentId}|${expMs}`).digest('base64url');
+}
+
+export type StopCheck =
+  { ok: true; incidentId: number } | { ok: false; reason: 'invalid' | 'expired' };
+
+export function verifyStop(
+  key: string,
+  params: { i: string; exp: string; sig: string },
+  nowMs: number,
+): StopCheck {
+  if (!/^\d{1,12}$/.test(params.i) || !/^\d{10,16}$/.test(params.exp)) {
+    return { ok: false, reason: 'invalid' };
+  }
+  const incidentId = Number(params.i);
+  if (!safeEqual(signStop(key, incidentId, Number(params.exp)), params.sig)) {
+    return { ok: false, reason: 'invalid' };
+  }
+  if (nowMs > Number(params.exp)) return { ok: false, reason: 'expired' };
+  return { ok: true, incidentId };
+}

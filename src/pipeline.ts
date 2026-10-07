@@ -13,6 +13,7 @@ import {
   type HouseholdContext,
 } from './critique.ts';
 import { recordDecision, recordEvent, recordEvidence, type DecisionKind } from './db.ts';
+import type { Evaluation } from './coordinator.ts';
 import { decide, inWindow, needsCritique, type Decision } from './decide.ts';
 import {
   acquireEventFrame,
@@ -71,6 +72,8 @@ export interface PipelineDeps {
   writeProbe: (r: ProbeRecord) => void;
   writeDecision: (r: DecisionRecord) => void;
   saveFrame: (evidenceId: string, jpeg: Buffer) => void;
+  // Coordinator hook (plan v7 step 3): every decision with its evidence, dry run included.
+  onEvaluation?: (ev: Evaluation) => void;
   clock?: Clock;
 }
 
@@ -206,6 +209,7 @@ export function createPipeline(cfg: PipelineConfig, deps: PipelineDeps) {
       kind: DecisionKind,
       reason: string,
       extra: Partial<DecisionRecord> = {},
+      evidence?: { captureTs: number; frame: Buffer; species?: string },
     ): DecisionRecord => {
       timings.decided_after_event_ms = clock.now() - ev.eventTs;
       const rec: DecisionRecord = {
@@ -231,6 +235,15 @@ export function createPipeline(cfg: PipelineConfig, deps: PipelineDeps) {
         dryRun: true,
       });
       deps.writeDecision(rec);
+      deps.onEvaluation?.({
+        zone,
+        kind,
+        reason,
+        species: evidence?.species,
+        evidenceId: rec.evidence_id,
+        captureTs: evidence?.captureTs,
+        frame: evidence?.frame,
+      });
       return rec;
     };
 
@@ -275,14 +288,18 @@ export function createPipeline(cfg: PipelineConfig, deps: PipelineDeps) {
         ...(j.critique !== undefined ? { critique: j.critique } : {}),
       };
       // Evidence must still be fresh when a profile would act (plan v7 section 4).
+      const species = d.kind === 'wildlife' ? d.species : undefined;
+      const evidence = { captureTs: frame.captureTs, frame: frame.jpeg, species };
       if ((d.kind === 'intruder' || d.kind === 'wildlife') && age > MAX_EVIDENCE_AGE_MS) {
-        return finish('reject', `stale_evidence_${age}ms_${d.kind}`, extra);
+        return finish('reject', `stale_evidence_${age}ms_${d.kind}`, extra, evidence);
       }
       if (d.kind === 'intruder' || d.kind === 'wildlife') deps.saveFrame(evidenceId, frame.jpeg);
-      return finish(d.kind, d.reason, {
-        ...extra,
-        would: wouldText(d.kind, zone, d.kind === 'wildlife' ? d.species : undefined),
-      });
+      return finish(
+        d.kind,
+        d.reason,
+        { ...extra, would: wouldText(d.kind, zone, species) },
+        evidence,
+      );
     } finally {
       inFlight.delete(ev.deviceId);
     }

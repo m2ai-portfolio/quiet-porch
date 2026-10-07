@@ -719,3 +719,64 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
 }
 
 export type Coordinator = ReturnType<typeof createCoordinator>;
+
+// The "coordinator" section of config/quiet-porch.json. Every entity it names must be in the
+// allowlist, and interior lights must be interior, so a typo fails at load, not at 2 a.m.
+export interface CoordinatorSection {
+  allowlist: string;
+  publicBase: string;
+  maxIntruderLevel: number;
+  cooldownMs: number;
+  ownerUserIds: string[];
+  interiorLights: string[];
+  zones: ActuatorConfig['zones'];
+  clips: ActuatorConfig['clips'];
+}
+
+export function parseCoordinatorSection(
+  raw: unknown,
+  allowlist: Allowlist,
+  mode: Mode,
+): CoordinatorConfig & { publicBase: string } {
+  const c = raw as Partial<CoordinatorSection> | null;
+  if (!c || typeof c !== 'object') throw new Error('coordinator config: not an object');
+  if (typeof c.publicBase !== 'string' || !/^https:\/\//.test(c.publicBase)) {
+    throw new Error('coordinator config: publicBase must be an https URL');
+  }
+  if (!Number.isInteger(c.maxIntruderLevel) || c.maxIntruderLevel! < 0 || c.maxIntruderLevel! > 4) {
+    throw new Error('coordinator config: maxIntruderLevel must be 0..4');
+  }
+  if (!Number.isFinite(c.cooldownMs) || c.cooldownMs! < 0) {
+    throw new Error('coordinator config: cooldownMs missing');
+  }
+  if (!Array.isArray(c.ownerUserIds) || c.ownerUserIds.includes('quiet-porch')) {
+    throw new Error('coordinator config: ownerUserIds must be an array without the app user');
+  }
+  const known = (id: string, where: string) => {
+    if (!allowlist.entities.has(id))
+      throw new Error(`coordinator config: ${where} ${id} not in allowlist`);
+    return allowlist.entities.get(id)!;
+  };
+  for (const id of c.interiorLights ?? []) {
+    if (known(id, 'interiorLights').placement !== 'interior') {
+      throw new Error(`coordinator config: ${id} is not interior`);
+    }
+  }
+  for (const [zone, z] of Object.entries(c.zones ?? {})) {
+    for (const [k, id] of Object.entries(z)) if (id) known(id, `zones.${zone}.${k}`);
+    if (z.durationSetter && allowlist.entities.get(z.durationSetter)?.cleanup_via !== z.valve) {
+      throw new Error(
+        `coordinator config: zones.${zone} durationSetter must clean up via its valve`,
+      );
+    }
+  }
+  if (!c.clips?.bark || !c.clips?.wildlife) throw new Error('coordinator config: clips missing');
+  return {
+    actuators: { interiorLights: c.interiorLights ?? [], zones: c.zones ?? {}, clips: c.clips },
+    mode,
+    maxIntruderLevel: c.maxIntruderLevel!,
+    cooldownMs: c.cooldownMs!,
+    ownerUserIds: c.ownerUserIds,
+    publicBase: c.publicBase.replace(/\/$/, ''),
+  };
+}

@@ -11,7 +11,22 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
-import { checkLinkFreshness, nonceMatches, verifyWebhookSignature } from './crypto.ts';
+import { createActuators } from './actuators.ts';
+import { loadAllowlist, type Allowlist } from './allowlist.ts';
+import {
+  createCoordinator,
+  parseCoordinatorSection,
+  type Coordinator,
+  type CoordinatorConfig,
+} from './coordinator.ts';
+import {
+  checkLinkFreshness,
+  nonceMatches,
+  signStop,
+  STOP_LINK_TTL_MS,
+  verifyStop,
+  verifyWebhookSignature,
+} from './crypto.ts';
 import { bedrockConfigFromEnv, converse, type ContentBlock } from './bedrock.ts';
 import { openDb } from './db.ts';
 import { parseMotionEvent } from './frames.ts';
@@ -37,6 +52,9 @@ export interface Config {
   accountLabel: string;
   // Dry-run decision pipeline (plan v7 step 2). Absent: webhooks are only logged.
   pipeline?: { config: PipelineConfig; converse: (content: ContentBlock[]) => Promise<string> };
+  // Coordinator (plan v7 step 3). Needs the pipeline; actuators are dry-run simulators while
+  // the pipeline config is a dry run, which parsePipelineConfig enforces.
+  coordinator?: { config: CoordinatorConfig & { publicBase: string }; allowlist: Allowlist };
 }
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -129,9 +147,32 @@ export function createApp(cfg: Config) {
       `${JSON.stringify({ logged_at: new Date().toISOString(), ...rec })}\n`,
       { mode: 0o600 },
     );
+  const db = cfg.pipeline ? openDb(join(cfg.stateDir, 'quiet-porch.db')) : undefined;
+  let coordinator: Coordinator | undefined;
+  if (cfg.pipeline && cfg.coordinator && db) {
+    const coordLog = jsonl('coordinator.jsonl');
+    const actuators = createActuators(cfg.pipeline.config.dryRun, (r) => coordLog(r));
+    const publicBase = cfg.coordinator.config.publicBase;
+    coordinator = createCoordinator(cfg.coordinator.config, {
+      db,
+      allowlist: cfg.coordinator.allowlist,
+      actuators,
+      killed: () => existsSync(join(cfg.stateDir, 'KILL')),
+      log: (r) => {
+        coordLog(r);
+        if (r.event !== 'would_call' && r.event !== 'call_done') return;
+        log(`coordinator: ${r.event} ${String(r.service)} ${String(r.entity_id)}`);
+      },
+      stopUrl: (incidentId) => {
+        const exp = Date.now() + STOP_LINK_TTL_MS;
+        const sig = signStop(cfg.hmacKey, incidentId, exp);
+        return `${publicBase}/stop?i=${incidentId}&exp=${exp}&sig=${sig}`;
+      },
+    });
+  }
   const pipeline = cfg.pipeline
     ? createPipeline(cfg.pipeline.config, {
-        db: openDb(join(cfg.stateDir, 'quiet-porch.db')),
+        db: db!,
         // Read the token at call time so a refresh between attempts is picked up.
         download: (accountId, deviceId, ts, opts) => {
           const t = store.all().find((r) => r.account_id === accountId && r.claimed);
@@ -149,8 +190,48 @@ export function createApp(cfg: Config) {
           mkdirSync(join(cfg.stateDir, 'frames'), { recursive: true, mode: 0o700 });
           writeFileSync(join(cfg.stateDir, 'frames', `${evidenceId}.jpg`), jpeg, { mode: 0o600 });
         },
+        onEvaluation: coordinator
+          ? (ev) =>
+              void coordinator!
+                .onEvaluation(ev)
+                .catch((e) => log(`coordinator: FAILED ${(e as Error).message}`))
+          : undefined,
       })
     : undefined;
+
+  // Stop link from the owner notification. Safety commands only; single use per signature.
+  async function handleStop(url: URL, res: ServerResponse): Promise<void> {
+    const params = {
+      i: url.searchParams.get('i') ?? '',
+      exp: url.searchParams.get('exp') ?? '',
+      sig: url.searchParams.get('sig') ?? '',
+    };
+    const check = verifyStop(cfg.hmacKey, params, Date.now());
+    const html = (status: number, title: string, msg: string) =>
+      send(res, status, page(title, `<p>${msg}</p>`), 'text/html');
+    if (!check.ok) {
+      log(`stop: rejected (${check.reason})`);
+      return check.reason === 'expired'
+        ? html(410, 'Link expired', 'This Stop link has expired.')
+        : html(403, 'Invalid link', 'This Stop link is not valid.');
+    }
+    if (!coordinator || !db) return html(503, 'Not running', 'The coordinator is not running.');
+    try {
+      db.prepare('INSERT INTO stop_uses (sig, incident_id, used_at) VALUES (?, ?, ?)').run(
+        params.sig,
+        check.incidentId,
+        Date.now(),
+      );
+    } catch {
+      log(`stop: replay for incident ${check.incidentId}`);
+      return html(409, 'Already used', 'This Stop link was already used.');
+    }
+    const r = await coordinator.standDown(check.incidentId, 'stop_link');
+    log(`stop: incident ${check.incidentId} ${r}`);
+    return r === 'stopped'
+      ? html(200, 'Stopped', 'Everything Quiet Porch turned on has been turned off.')
+      : html(200, 'Nothing to stop', 'That incident had already ended.');
+  }
 
   async function onTokenExchange(code: string): Promise<void> {
     try {
@@ -344,6 +425,8 @@ export function createApp(cfg: Config) {
           return await handleLinkPost(req, res);
         case 'POST /webhook':
           return await handleWebhook(req, res);
+        case 'GET /stop':
+          return await handleStop(url, res);
         case 'GET /home':
         case 'GET /': {
           const tokens = store.all();
@@ -368,7 +451,7 @@ export function createApp(cfg: Config) {
     }
   });
 
-  return { server, store, refreshDue };
+  return { server, store, refreshDue, coordinator };
 }
 
 function requireEnv(name: string): string {
@@ -398,8 +481,41 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       converse: async (content) => (await converse(bedrock, content)).text,
     };
     log(`pipeline: dry run enabled from ${configPath}`);
+    const raw = JSON.parse(readFileSync(configPath, 'utf8')) as {
+      coordinator?: { allowlist?: string };
+    };
+    if (raw.coordinator) {
+      const allowlist = loadAllowlist(
+        join(import.meta.dirname, '..', raw.coordinator.allowlist ?? 'config/allowlist.json'),
+      );
+      cfg.coordinator = {
+        allowlist,
+        config: parseCoordinatorSection(
+          raw.coordinator,
+          allowlist,
+          cfg.pipeline.config.context.mode,
+        ),
+      };
+      log(
+        `coordinator: enabled (dry run), max intruder level ${cfg.coordinator.config.maxIntruderLevel}`,
+      );
+    }
   }
-  const { server, refreshDue } = createApp(cfg);
+  const { server, refreshDue, coordinator } = createApp(cfg);
+  // Boot before accepting events: pending intents become reconcile rows, an open incident
+  // closes, exterior actuators are swept off (plan v7 section 7).
+  if (coordinator) await coordinator.boot();
   server.listen(cfg.port, '127.0.0.1', () => log(`quiet-porch listening on 127.0.0.1:${cfg.port}`));
   setInterval(() => void refreshDue(), 60_000);
+  if (coordinator) {
+    let ticking = false;
+    setInterval(() => {
+      if (ticking) return;
+      ticking = true;
+      void coordinator
+        .tick()
+        .catch((e) => log(`coordinator: tick FAILED ${(e as Error).message}`))
+        .finally(() => (ticking = false));
+    }, 1000);
+  }
 }

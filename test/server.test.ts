@@ -4,7 +4,11 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { computeNonce } from '../src/crypto.ts';
+import { computeNonce, signStop } from '../src/crypto.ts';
+import { DatabaseSync } from 'node:sqlite';
+import { loadAllowlist } from '../src/allowlist.ts';
+import { parseCoordinatorSection } from '../src/coordinator.ts';
+import { openIncident } from '../src/db.ts';
 import { createApp, type Config } from '../src/server.ts';
 
 const HMAC = 'test-hmac-key';
@@ -69,7 +73,9 @@ describe('quiet-porch server', () => {
   let calls: RingCall[];
   const realFetch = globalThis.fetch;
 
-  async function start(opts: { failPost?: boolean; pipeline?: boolean } = {}) {
+  async function start(
+    opts: { failPost?: boolean; pipeline?: boolean; coordinator?: boolean } = {},
+  ) {
     calls = [];
     dir = mkdtempSync(join(tmpdir(), 'qp-'));
     const cfg: Config = {
@@ -108,6 +114,18 @@ describe('quiet-porch server', () => {
           }
         : {}),
     };
+    if (opts.coordinator) {
+      const allowlist = loadAllowlist(
+        new URL('../config/allowlist.json', import.meta.url).pathname,
+      );
+      const raw = JSON.parse(
+        readFileSync(new URL('../config/quiet-porch.json', import.meta.url), 'utf8'),
+      );
+      cfg.coordinator = {
+        allowlist,
+        config: parseCoordinatorSection(raw.coordinator, allowlist, 'home'),
+      };
+    }
     app = createApp(cfg);
     await new Promise<void>((r) => app.server.listen(0, '127.0.0.1', r));
     base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
@@ -308,6 +326,32 @@ describe('quiet-porch server', () => {
         reason: 'perception_evidence_id_mismatch',
         dry_run: true,
       });
+    });
+
+    it('Stop link: bad signature 403, expired 410, valid stops once, replay 409', async () => {
+      app.server.close();
+      vi.unstubAllGlobals();
+      rmSync(dir, { recursive: true, force: true });
+      await start({ pipeline: true, coordinator: true });
+      const db = new DatabaseSync(join(dir, 'quiet-porch.db'));
+      const id = openIncident(db, 'front_yard', 'intruder')!;
+      db.close();
+      const url = (i: number, exp: number, sig = signStop(HMAC, i, exp)) =>
+        `${base}/ring/stop?i=${i}&exp=${exp}&sig=${sig}`;
+      const exp = Date.now() + 60_000;
+      expect((await fetch(url(id, exp, 'forged'))).status).toBe(403);
+      expect((await fetch(url(id + 1, exp, signStop(HMAC, id, exp)))).status).toBe(403);
+      expect((await fetch(url(id, Date.now() - 1))).status).toBe(410);
+      const ok = await fetch(url(id, exp));
+      expect(ok.status).toBe(200);
+      expect(await ok.text()).toContain('Stopped');
+      expect((await fetch(url(id, exp))).status).toBe(409);
+      const check = new DatabaseSync(join(dir, 'quiet-porch.db'));
+      expect(check.prepare('SELECT status, exit_reason FROM incidents').get()).toEqual({
+        status: 'cancelled',
+        exit_reason: 'stand_down:stop_link',
+      });
+      check.close();
     });
 
     it('with the pipeline off (default), a motion event makes no Ring call', async () => {

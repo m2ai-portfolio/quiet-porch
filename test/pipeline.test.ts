@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContentBlock } from '../src/bedrock.ts';
+import type { Evaluation } from '../src/coordinator.ts';
 import { openDb } from '../src/db.ts';
 import type { MotionEvent, ProbeRecord } from '../src/frames.ts';
 import {
@@ -88,7 +89,11 @@ describe('decision pipeline (dry run)', () => {
 
   function make(
     model: ReturnType<typeof fakeModel>,
-    opts: { killed?: boolean; download?: () => Promise<ImageAttempt> } = {},
+    opts: {
+      killed?: boolean;
+      download?: () => Promise<ImageAttempt>;
+      onEvaluation?: (e: Evaluation) => void;
+    } = {},
   ) {
     return createPipeline(cfg, {
       db,
@@ -98,9 +103,32 @@ describe('decision pipeline (dry run)', () => {
       writeProbe: (r) => probes.push(r),
       writeDecision: (r) => decisions.push(r),
       saveFrame: (id) => saved.push(id),
+      onEvaluation: opts.onEvaluation,
       clock,
     });
   }
+
+  it('hands every decision to the coordinator with its evidence id, capture time and frame', async () => {
+    const seen: Evaluation[] = [];
+    const model = fakeModel([{ class: 'armadillo', confidence: 0.93 }], 'nuisance');
+    const r = await make(model, { onEvaluation: (e) => seen.push(e) }).handle(ev(), {});
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      zone: 'front_yard',
+      kind: 'wildlife',
+      species: 'armadillo',
+      evidenceId: r!.evidence_id,
+    });
+    expect(typeof seen[0].captureTs).toBe('number');
+    expect(Buffer.isBuffer(seen[0].frame)).toBe(true);
+    const none: Evaluation[] = [];
+    await make(model, {
+      onEvaluation: (e) => none.push(e),
+      download: async () => ({ status: 416, step: 2, error_code: 'MEDIA_NOT_FOUND' }),
+    }).handle(ev('other-event'), {});
+    expect(none).toMatchObject([{ kind: 'no_evidence' }]);
+    expect(none[0].captureTs).toBeUndefined();
+  });
 
   it('armadillo at night with a nuisance verdict: would run the wildlife profile, frame saved', async () => {
     const model = fakeModel([{ class: 'armadillo', confidence: 0.93 }], 'nuisance');
