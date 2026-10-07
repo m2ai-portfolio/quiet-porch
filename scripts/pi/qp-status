@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# qp-status: "playing" while any qp-audio unit is active, else "idle".
+set -euo pipefail
+if systemctl --user list-units --state=active --plain --no-legend 'qp-audio-*' | grep -q .; then
+  echo "playing"
+else
+  echo "idle"
+fi

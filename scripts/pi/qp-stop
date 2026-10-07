@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# qp-stop <stop_epoch_ms>: record the stop epoch, stop every qp-audio unit, read back none active.
+set -euo pipefail
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/quiet-porch"
+epoch="${1:-}"
+[[ $epoch =~ ^[0-9]{10,16}$ ]] || { echo "bad_epoch"; exit 2; }
+mkdir -p "$STATE"
+exec 9>"$STATE/audio.lock"
+flock 9
+prev="$(cat "$STATE/audio-stop-epoch" 2>/dev/null || echo 0)"
+if (( epoch > prev )); then echo "$epoch" > "$STATE/audio-stop-epoch"; fi
+systemctl --user stop 'qp-audio-*' 2>/dev/null || true
+if systemctl --user list-units --state=active --plain --no-legend 'qp-audio-*' | grep -q .; then
+  echo "still_active"
+  exit 1
+fi
+echo "stopped"
