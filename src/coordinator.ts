@@ -87,6 +87,7 @@ export interface CoordinatorDeps {
   log: (rec: { event: string; [k: string]: unknown }) => void;
   stopUrl: (incidentId: number) => string;
   clock?: CoordClock;
+  mode?: () => Mode; // live house mode; cfg.mode until set
 }
 
 interface Ctx {
@@ -474,7 +475,7 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     if (!frame) return;
     const r = ladderStep(ladderOf(inc), frame, {
       now: clock.now(),
-      mode: cfg.mode,
+      mode: deps.mode?.() ?? cfg.mode,
       maxLevel: cfg.maxIntruderLevel,
     });
     saveLadder(inc.id, r.state, ev.evidenceId);

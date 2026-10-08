@@ -23,7 +23,7 @@
     "publicBase": "https://quiet-porch.example.ts.net/ring",
     "maxIntruderLevel": 1,
     "cooldownMs": 600000,
-    "ownerUserIds": [],
+    "ownerUserIds": ["mcp:owner"],
     "interiorLights": [],
     "zones": {
       "front_yard": {

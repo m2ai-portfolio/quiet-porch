@@ -79,6 +79,8 @@ export interface PipelineDeps {
   saveFrame: (evidenceId: string, jpeg: Buffer) => void;
   // Coordinator hook (plan v7 step 3): every decision with its evidence, dry run included.
   onEvaluation?: (ev: Evaluation) => void;
+  // Live house mode (set_mode over status-mcp); the config value until someone sets it.
+  mode?: () => HouseholdContext['mode'];
   clock?: Clock;
 }
 
@@ -295,7 +297,15 @@ export function createPipeline(cfg: PipelineConfig, deps: PipelineDeps) {
         imageSha256: imageSha,
       });
 
-      const j = await judgeFrame(frame.jpeg, frame.captureTs, evidenceId, zone, cfg, deps.converse);
+      const mode = deps.mode?.() ?? cfg.context.mode;
+      const j = await judgeFrame(
+        frame.jpeg,
+        frame.captureTs,
+        evidenceId,
+        zone,
+        { ...cfg, context: { ...cfg.context, mode } },
+        deps.converse,
+      );
       timings.perception_ms = j.perceptionMs;
       if (j.critiqueMs !== undefined) timings.critique_ms = j.critiqueMs;
       const d = j.decision;

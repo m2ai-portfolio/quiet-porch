@@ -68,6 +68,7 @@ function setup(
     maxLevel?: number;
     wrap?: (a: Actuators) => Actuators;
     killed?: () => boolean;
+    liveMode?: () => 'home' | 'away' | 'night';
   } = {},
 ) {
   const db = openDb(':memory:');
@@ -92,6 +93,7 @@ function setup(
       killed: opts.killed ?? (() => false),
       log: (r) => events.push(r),
       stopUrl: (i) => `https://example/ring/stop?i=${i}`,
+      mode: opts.liveMode,
       clock,
     },
   );
@@ -169,6 +171,25 @@ describe('coordinator: intruder ladder dispatch (dry run)', () => {
     await t.clock.advance(40_000);
     await t.coord.tick();
     expect(t.events.some((e) => e.event === 'valve_closed_on_its_own')).toBe(true);
+  });
+
+  it('the live mode (set_mode) decides L4, not the config default', async () => {
+    let live: 'home' | 'night' = 'home';
+    const t = setup({ mode: 'night', liveMode: () => live });
+    for (let s = 0; s <= 60; s += 5) {
+      if (s === 55) live = 'night';
+      await t.coord.onEvaluation(t.ev('intruder', 'person_unknown'));
+      await t.settle();
+      await t.clock.advance(5000);
+    }
+    expect(t.calls()).toContain('open_valve valve.front_yard_sprinkler_valve');
+    const h = setup({ mode: 'night', liveMode: () => 'home' });
+    for (let s = 0; s <= 65; s += 5) {
+      await h.coord.onEvaluation(h.ev('intruder', 'person_unknown'));
+      await h.settle();
+      await h.clock.advance(5000);
+    }
+    expect(h.calls()).not.toContain('open_valve valve.front_yard_sprinkler_valve');
   });
 
   it('the level cap holds: with max level 1 nothing past L1 is dispatched', async () => {

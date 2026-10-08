@@ -12,6 +12,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { createActuators } from './actuators.ts';
+import { createStatusMcp, fileModeStore, loadOrCreateTokens } from './mcp.ts';
 import { loadAllowlist, type Allowlist } from './allowlist.ts';
 import {
   createCoordinator,
@@ -55,6 +56,8 @@ export interface Config {
   // Coordinator (plan v7 step 3). Needs the pipeline; actuators are dry-run simulators while
   // the pipeline config is a dry run, which parsePipelineConfig enforces.
   coordinator?: { config: CoordinatorConfig & { publicBase: string }; allowlist: Allowlist };
+  // status-mcp (plan v7 step 4). Needs the coordinator.
+  mcp?: { port: number; host: string; allowedOrigins: string[] };
 }
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -148,6 +151,9 @@ export function createApp(cfg: Config) {
       { mode: 0o600 },
     );
   const db = cfg.pipeline ? openDb(join(cfg.stateDir, 'quiet-porch.db')) : undefined;
+  const modeStore = cfg.pipeline
+    ? fileModeStore(join(cfg.stateDir, 'mode.json'), cfg.pipeline.config.context.mode)
+    : undefined;
   let coordinator: Coordinator | undefined;
   if (cfg.pipeline && cfg.coordinator && db) {
     const coordLog = jsonl('coordinator.jsonl');
@@ -163,6 +169,7 @@ export function createApp(cfg: Config) {
         if (r.event !== 'would_call' && r.event !== 'call_done') return;
         log(`coordinator: ${r.event} ${String(r.service)} ${String(r.entity_id)}`);
       },
+      mode: () => modeStore!.get(),
       stopUrl: (incidentId) => {
         const exp = Date.now() + STOP_LINK_TTL_MS;
         const sig = signStop(cfg.hmacKey, incidentId, exp);
@@ -190,6 +197,7 @@ export function createApp(cfg: Config) {
           mkdirSync(join(cfg.stateDir, 'frames'), { recursive: true, mode: 0o700 });
           writeFileSync(join(cfg.stateDir, 'frames', `${evidenceId}.jpg`), jpeg, { mode: 0o600 });
         },
+        mode: () => modeStore!.get(),
         onEvaluation: coordinator
           ? (ev) =>
               void coordinator!
@@ -451,7 +459,22 @@ export function createApp(cfg: Config) {
     }
   });
 
-  return { server, store, refreshDue, coordinator };
+  const mcp =
+    cfg.mcp && coordinator && db && modeStore
+      ? createStatusMcp({
+          db,
+          tokens: loadOrCreateTokens(join(cfg.stateDir, 'mcp-tokens.json')),
+          mode: modeStore,
+          killed: () => existsSync(join(cfg.stateDir, 'KILL')),
+          dryRun: cfg.pipeline!.config.dryRun,
+          standDown: (id, by) => coordinator!.standDown(id, by),
+          clearReconcile: (row, user) => coordinator!.clearReconcile(row, user),
+          allowedOrigins: cfg.mcp.allowedOrigins,
+          log,
+        }).server
+      : undefined;
+
+  return { server, store, refreshDue, coordinator, mcp };
 }
 
 function requireEnv(name: string): string {
@@ -502,11 +525,22 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       );
     }
   }
-  const { server, refreshDue, coordinator } = createApp(cfg);
+  if (cfg.coordinator && process.env.QUIET_PORCH_MCP !== '0') {
+    cfg.mcp = {
+      port: Number(process.env.QUIET_PORCH_MCP_PORT ?? 3461),
+      host: process.env.QUIET_PORCH_MCP_HOST ?? '0.0.0.0',
+      allowedOrigins: (process.env.QUIET_PORCH_MCP_ORIGINS ?? '').split(',').filter(Boolean),
+    };
+  }
+  const { server, refreshDue, coordinator, mcp } = createApp(cfg);
   // Boot before accepting events: pending intents become reconcile rows, an open incident
   // closes, exterior actuators are swept off (plan v7 section 7).
   if (coordinator) await coordinator.boot();
   server.listen(cfg.port, '127.0.0.1', () => log(`quiet-porch listening on 127.0.0.1:${cfg.port}`));
+  if (mcp && cfg.mcp) {
+    const { host, port } = cfg.mcp;
+    mcp.listen(port, host, () => log(`status-mcp listening on ${host}:${port}/mcp`));
+  }
   setInterval(() => void refreshDue(), 60_000);
   if (coordinator) {
     let ticking = false;
