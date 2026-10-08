@@ -101,6 +101,7 @@ describe('quiet-porch server', () => {
                   nuisanceSpecies: ['armadillo'],
                 },
                 followUpProbe: false,
+                wildlifeMaxEvidenceAgeMs: 35_000,
               },
               converse: async () =>
                 JSON.stringify({

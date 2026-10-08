@@ -83,6 +83,7 @@ function setup(
       maxIntruderLevel: opts.maxLevel ?? 4,
       cooldownMs: 600_000,
       ownerUserIds: ['owner-matthew'],
+      wildlifeMaxEvidenceAgeMs: 35_000,
     },
     {
       db,
@@ -373,6 +374,34 @@ describe('coordinator: wildlife profile', () => {
     await t.clock.advance(5 * 60_000);
     await t.coord.tick();
     expect(t.calls().at(-1)).toBe('turn_off light.stairs');
+  });
+
+  it('a wildlife trigger frame up to 35 s old runs the whole plan; 36 s is not opened', async () => {
+    const t = setup();
+    await t.coord.onEvaluation(
+      t.ev('wildlife', 'nuisance_at_night', { ...armadillo, captureTs: T0 - 32_000 }),
+    );
+    await t.settle();
+    expect(t.calls()).toEqual([
+      'set_value number.front_yard_sprinkler_irrigation_duration',
+      'open_valve valve.front_yard_sprinkler_valve',
+      'turn_on light.stairs',
+      'play_clip pi_audio.porch_speaker',
+    ]);
+    const u = setup();
+    await u.coord.onEvaluation(
+      u.ev('wildlife', 'nuisance_at_night', { ...armadillo, captureTs: T0 - 36_000 }),
+    );
+    await u.settle();
+    expect(u.calls()).toEqual([]);
+    expect(u.incidents()).toEqual([]);
+  });
+
+  it('the longer wildlife window never applies to the intruder ladder', async () => {
+    const t = setup();
+    await t.coord.onEvaluation(t.ev('intruder', 'person_unknown', { captureTs: T0 - 20_000 }));
+    await t.settle();
+    expect(t.intents()).toEqual([]);
   });
 
   it('a duration read-back mismatch blocks open_valve', async () => {

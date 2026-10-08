@@ -12,17 +12,12 @@
   "context": {
     "mode": "home",
     "knownPets": [],
-    "expectedVisitors": [
-      "package and mail deliveries during the day"
-    ],
-    "routines": [
-      "household members come and go through the front door"
-    ],
-    "nuisanceSpecies": [
-      "armadillo"
-    ]
+    "expectedVisitors": ["package and mail deliveries during the day"],
+    "routines": ["household members come and go through the front door"],
+    "nuisanceSpecies": ["armadillo"]
   },
   "followUpProbe": true,
+  "wildlifeMaxEvidenceAgeMs": 35000,
   "coordinator": {
     "allowlist": "config/allowlist.json",
     "publicBase": "https://quiet-porch.example.ts.net/ring",

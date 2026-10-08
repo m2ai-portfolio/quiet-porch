@@ -41,6 +41,9 @@ export const INFLIGHT_WAIT_MS = 3000;
 export const CLEANUP_BUDGET_MS = 15_000;
 export const CLEANUP_TRIES = 3;
 export const MAX_EVIDENCE_AGE_MS = 15_000;
+// A wildlife run is one-shot: its trigger frame may be up to wildlifeMaxEvidenceAgeMs old
+// (checked by the pipeline), and its steps then have this long to dispatch.
+export const WILDLIFE_STEP_BUDGET_MS = 10_000;
 export const AUDIO_CAP = { plays: 3, windowMs: 60_000 };
 export const RECONCILE_FIRST_MS = 30_000;
 export const RECONCILE_MAX_MS = 5 * 60_000;
@@ -52,6 +55,7 @@ export interface CoordinatorConfig {
   maxIntruderLevel: number;
   cooldownMs: number;
   ownerUserIds: string[];
+  wildlifeMaxEvidenceAgeMs: number;
 }
 
 export interface CoordClock {
@@ -87,6 +91,7 @@ export interface CoordinatorDeps {
 
 interface Ctx {
   incidentId: number;
+  maxEvidenceAgeMs: number;
   version: number;
   zone: string;
   evidenceId?: string;
@@ -240,7 +245,7 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
       if (
         !ctx.evidenceId ||
         newest?.evidenceId !== ctx.evidenceId ||
-        clock.now() - newest.captureTs >= MAX_EVIDENCE_AGE_MS
+        clock.now() - newest.captureTs >= ctx.maxEvidenceAgeMs
       ) {
         return refuse('stale_evidence');
       }
@@ -476,6 +481,7 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     if (r.exit) return endIncident(inc.id, 'exited', r.exit);
     const ctx: Ctx = {
       incidentId: inc.id,
+      maxEvidenceAgeMs: MAX_EVIDENCE_AGE_MS,
       version: inc.version,
       zone: inc.zone,
       evidenceId: ev.evidenceId,
@@ -502,6 +508,7 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     const inc = incidentById(id)!;
     void enqueue(plan.steps, {
       incidentId: id,
+      maxEvidenceAgeMs: cfg.wildlifeMaxEvidenceAgeMs + WILDLIFE_STEP_BUDGET_MS,
       version: inc.version,
       zone: ev.zone,
       evidenceId: ev.evidenceId,
@@ -578,6 +585,9 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
       if (deps.killed()) return log({ event: 'not_opened', reason: 'kill_switch', zone: ev.zone });
       if (cooldownActive(ev.zone, 'wildlife')) {
         return log({ event: 'not_opened', reason: 'wildlife_cooldown', zone: ev.zone });
+      }
+      if (ev.captureTs === undefined || clock.now() - ev.captureTs > cfg.wildlifeMaxEvidenceAgeMs) {
+        return log({ event: 'not_opened', reason: 'stale_evidence', zone: ev.zone });
       }
       return startWildlife(ev);
     }
@@ -737,6 +747,7 @@ export function parseCoordinatorSection(
   raw: unknown,
   allowlist: Allowlist,
   mode: Mode,
+  wildlifeMaxEvidenceAgeMs = MAX_EVIDENCE_AGE_MS,
 ): CoordinatorConfig & { publicBase: string } {
   const c = raw as Partial<CoordinatorSection> | null;
   if (!c || typeof c !== 'object') throw new Error('coordinator config: not an object');
@@ -777,6 +788,7 @@ export function parseCoordinatorSection(
     maxIntruderLevel: c.maxIntruderLevel!,
     cooldownMs: c.cooldownMs!,
     ownerUserIds: c.ownerUserIds,
+    wildlifeMaxEvidenceAgeMs,
     publicBase: c.publicBase.replace(/\/$/, ''),
   };
 }

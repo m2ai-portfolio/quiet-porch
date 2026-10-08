@@ -32,6 +32,10 @@ import {
 } from './perception.ts';
 
 export const MAX_EVIDENCE_AGE_MS = 15_000;
+// Wildlife trigger frames may be older: other_motion webhooks arrive ~11 s after the event and
+// the recording is ready ~21-26 s after it (recon 10-07). Matthew, 10-07: overlap of a person
+// and an armadillo is unlikely, 45 s is too long. Hard ceiling in code, value in config.
+export const WILDLIFE_MAX_EVIDENCE_AGE_CEILING_MS = 40_000;
 
 export interface PipelineConfig {
   timezone: string;
@@ -40,6 +44,7 @@ export interface PipelineConfig {
   context: HouseholdContext;
   dryRun: true; // step 2 has no actuators; anything else is refused at load
   followUpProbe: boolean;
+  wildlifeMaxEvidenceAgeMs: number; // defaults to MAX_EVIDENCE_AGE_MS
 }
 
 export interface DecisionRecord {
@@ -92,7 +97,21 @@ export function parsePipelineConfig(raw: unknown): PipelineConfig {
   for (const k of ['knownPets', 'expectedVisitors', 'routines', 'nuisanceSpecies'] as const) {
     if (!Array.isArray(ctx[k])) throw new Error(`pipeline config: context.${k} must be an array`);
   }
-  return { ...c, followUpProbe: c.followUpProbe ?? true } as PipelineConfig;
+  const wildlifeAge = c.wildlifeMaxEvidenceAgeMs ?? MAX_EVIDENCE_AGE_MS;
+  if (
+    !Number.isFinite(wildlifeAge) ||
+    wildlifeAge < MAX_EVIDENCE_AGE_MS ||
+    wildlifeAge > WILDLIFE_MAX_EVIDENCE_AGE_CEILING_MS
+  ) {
+    throw new Error(
+      `pipeline config: wildlifeMaxEvidenceAgeMs must be ${MAX_EVIDENCE_AGE_MS}..${WILDLIFE_MAX_EVIDENCE_AGE_CEILING_MS}`,
+    );
+  }
+  return {
+    ...c,
+    followUpProbe: c.followUpProbe ?? true,
+    wildlifeMaxEvidenceAgeMs: wildlifeAge,
+  } as PipelineConfig;
 }
 
 function sha256(b: Buffer | string): string {
@@ -290,7 +309,8 @@ export function createPipeline(cfg: PipelineConfig, deps: PipelineDeps) {
       // Evidence must still be fresh when a profile would act (plan v7 section 4).
       const species = d.kind === 'wildlife' ? d.species : undefined;
       const evidence = { captureTs: frame.captureTs, frame: frame.jpeg, species };
-      if ((d.kind === 'intruder' || d.kind === 'wildlife') && age > MAX_EVIDENCE_AGE_MS) {
+      const maxAge = d.kind === 'wildlife' ? cfg.wildlifeMaxEvidenceAgeMs : MAX_EVIDENCE_AGE_MS;
+      if ((d.kind === 'intruder' || d.kind === 'wildlife') && age > maxAge) {
         return finish('reject', `stale_evidence_${age}ms_${d.kind}`, extra, evidence);
       }
       if (d.kind === 'intruder' || d.kind === 'wildlife') deps.saveFrame(evidenceId, frame.jpeg);

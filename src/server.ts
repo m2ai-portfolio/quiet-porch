@@ -494,6 +494,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
           raw.coordinator,
           allowlist,
           cfg.pipeline.config.context.mode,
+          cfg.pipeline.config.wildlifeMaxEvidenceAgeMs,
         ),
       };
       log(

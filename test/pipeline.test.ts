@@ -93,9 +93,10 @@ describe('decision pipeline (dry run)', () => {
       killed?: boolean;
       download?: () => Promise<ImageAttempt>;
       onEvaluation?: (e: Evaluation) => void;
+      config?: PipelineConfig;
     } = {},
   ) {
-    return createPipeline(cfg, {
+    return createPipeline(opts.config ?? cfg, {
       db,
       download: opts.download ?? (async () => frame),
       converse: model,
@@ -199,6 +200,29 @@ describe('decision pipeline (dry run)', () => {
     const r = await make(model as never).handle(ev(), {});
     expect(r?.kind).toBe('reject');
     expect(r?.reason).toMatch(/^perception_model_error/);
+  });
+
+  it('with a 35 s wildlife window, an 18 s old armadillo frame is acted on but a person is not', async () => {
+    const config = parsePipelineConfig({ ...cfg, wildlifeMaxEvidenceAgeMs: 35_000 });
+    const slowly = (m: ReturnType<typeof fakeModel>) =>
+      vi.fn(async (c: ContentBlock[]) => {
+        t += 9000;
+        return m(c);
+      }) as never;
+    const armadillo = fakeModel([{ class: 'armadillo', confidence: 0.93 }], 'nuisance');
+    expect((await make(slowly(armadillo), { config }).handle(ev('w1'), {}))?.kind).toBe('wildlife');
+    const person = fakeModel([{ class: 'person', confidence: 0.95 }], 'unknown', true);
+    const r = await make(slowly(person), { config }).handle(ev('p1'), {});
+    expect(r?.reason).toMatch(/^stale_evidence_\d+ms_intruder$/);
+  });
+
+  it('the wildlife window is bounded in code: under 15 s or over 40 s is refused', () => {
+    expect(() => parsePipelineConfig({ ...cfg, wildlifeMaxEvidenceAgeMs: 41_000 })).toThrow(
+      /wildlifeMaxEvidenceAgeMs/,
+    );
+    expect(() => parsePipelineConfig({ ...cfg, wildlifeMaxEvidenceAgeMs: 10_000 })).toThrow(
+      /wildlifeMaxEvidenceAgeMs/,
+    );
   });
 
   it('evidence older than 15 s when the decision is reached is rejected, not acted on', async () => {

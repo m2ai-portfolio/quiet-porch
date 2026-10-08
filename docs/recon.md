@@ -240,7 +240,12 @@ mode `away`. Real Bedrock, the live `judgeFrame` path.
 - Consequence: the event-frame retries now run to +20 s after receipt (`5405cdb`), so an
   other_motion frame is fetched and judged. But the 15 s evidence-age rule then rejects any
   intruder or wildlife decision on it as `stale_evidence`. **As built, the wildlife profile cannot
-  fire on an other_motion event.** The fix is a policy change, so it waits for Matthew.
+  fire on an other_motion event.**
+- Resolved 10-07. Matthew said a person and an armadillo at the same time is unlikely (a
+  person would scare it off) and that 45 s is too long. Wildlife trigger frames may now be up to
+  `wildlifeMaxEvidenceAgeMs` = 35 s old (config; code allows 15 to 40 s). The run's steps then
+  have a 10 s dispatch budget. The intruder ladder stays at 15 s. 35 s is about the floor:
+  readiness is ~26 s, plus ~6 s for two Bedrock calls.
 
 ### Step 3 (coordinator + adapters, dry run): built 10-07
 
