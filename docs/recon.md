@@ -272,3 +272,21 @@ Not built yet (each one is named in plan v7):
 - The race test where qp-play is paused after its epoch check while qp-stop runs. Only the
   stop-first and older-epoch cases are tested.
 - `qp-*` and the clips are not installed on the Pi; that waits for the hardware gate.
+
+### Step 4 (status-mcp + simulated Alexa+): built 10-07
+
+- `src/mcp.ts` is a tools-only MCP server: Streamable HTTP, protocol 2025-11-25, single JSON
+  responses. It listens on `0.0.0.0:3461/mcp` (LAN and tailnet); the Funnel does not route to
+  it.
+  - Read token: `get_incident_status` and `list_recent_incidents`.
+  - Owner token: also `stand_down`, `set_mode` and `clear_reconcile`.
+  - Tokens are in `~/.local/state/quiet-porch/mcp-tokens.json` (mode 600).
+- `set_mode` writes a persisted live mode (`mode.json`). Both the pipeline (critique context and
+  the daytime-home rule) and the coordinator (L4 eligibility) read it.
+- The simulated Alexa+ page is at `http://10.0.0.46:3461/alexa`. The viewer pastes a token, and
+  replies are spoken.
+- Verified 10-07 23:04 against the live service with curl: initialize, status, and 401 without a
+  token.
+- Verified 23:07 in a browser against a throwaway instance with demo tokens, which keeps the real
+  token out of the transcript: status, stand down, good night (set_mode night), recent.
+- Not verified: a real Echo calling the server. That gate is still open.
