@@ -160,6 +160,15 @@ describe('status-mcp over Streamable HTTP', () => {
     expect(standDown).not.toHaveBeenCalled();
   });
 
+  it('serves the simulated Alexa+ page without auth; it contains no token', async () => {
+    const res = await fetch(base.replace(/\/mcp$/, '/alexa'));
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('Quiet Porch, by voice');
+    expect(html).not.toContain(tokens.read);
+    expect(html).not.toContain(tokens.owner);
+  });
+
   it('unknown tools and methods are JSON-RPC errors', async () => {
     expect((await call('unlock_door')).body.error.code).toBe(-32602);
     expect((await rpc('resources/list')).body.error.code).toBe(-32601);

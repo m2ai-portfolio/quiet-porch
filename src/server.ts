@@ -497,16 +497,17 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   };
   const configPath =
     process.env.QUIET_PORCH_CONFIG ?? join(import.meta.dirname, '../config/quiet-porch.json');
+  const raw = (existsSync(configPath) ? JSON.parse(readFileSync(configPath, 'utf8')) : {}) as {
+    coordinator?: { allowlist?: string };
+    mcp?: { allowedOrigins?: string[] };
+  };
   if (process.env.QUIET_PORCH_PIPELINE !== '0' && existsSync(configPath)) {
     const bedrock = bedrockConfigFromEnv();
     cfg.pipeline = {
-      config: parsePipelineConfig(JSON.parse(readFileSync(configPath, 'utf8'))),
+      config: parsePipelineConfig(raw),
       converse: async (content) => (await converse(bedrock, content)).text,
     };
     log(`pipeline: dry run enabled from ${configPath}`);
-    const raw = JSON.parse(readFileSync(configPath, 'utf8')) as {
-      coordinator?: { allowlist?: string };
-    };
     if (raw.coordinator) {
       const allowlist = loadAllowlist(
         join(import.meta.dirname, '..', raw.coordinator.allowlist ?? 'config/allowlist.json'),
@@ -529,7 +530,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     cfg.mcp = {
       port: Number(process.env.QUIET_PORCH_MCP_PORT ?? 3461),
       host: process.env.QUIET_PORCH_MCP_HOST ?? '0.0.0.0',
-      allowedOrigins: (process.env.QUIET_PORCH_MCP_ORIGINS ?? '').split(',').filter(Boolean),
+      allowedOrigins: (raw.mcp?.allowedOrigins ?? []).filter((o) => typeof o === 'string'),
     };
   }
   const { server, refreshDue, coordinator, mcp } = createApp(cfg);

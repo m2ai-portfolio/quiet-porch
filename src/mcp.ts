@@ -10,6 +10,7 @@ import type { Mode } from './ladder.ts';
 
 export const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26'];
 const MAX_BODY = 64 * 1024;
+const ALEXA_SIM_HTML = readFileSync(new URL('./alexa-sim.html', import.meta.url), 'utf8');
 
 export interface McpTokens {
   read: string;
@@ -376,6 +377,14 @@ export function createStatusMcp(deps: StatusDeps) {
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', 'http://localhost');
+      // The simulated Alexa+ page holds no secret: the viewer pastes a token into it.
+      if (req.method === 'GET' && url.pathname === '/alexa') {
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store',
+        });
+        return res.end(ALEXA_SIM_HTML);
+      }
       if (url.pathname !== '/mcp') return json(res, 404, { error: 'not found' });
       // DNS-rebinding guard (spec: servers MUST validate Origin when present).
       const origin = req.headers.origin;

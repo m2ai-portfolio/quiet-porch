@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Quiet Porch Alexa Sim</title>
+    <style>
+      :root {
+        --bg: #f6f7f9;
+        --card: #fff;
+        --ink: #1d1d1f;
+        --muted: #6b7280;
+        --accent: #0e7490;
+        --you: #e0f2fe;
+        --line: #e5e7eb;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0f1115;
+          --card: #181b21;
+          --ink: #e8eaed;
+          --muted: #9aa0a6;
+          --accent: #22d3ee;
+          --you: #0c3443;
+          --line: #2a2f37;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          16px/1.45 system-ui,
+          -apple-system,
+          Segoe UI,
+          sans-serif;
+      }
+      main {
+        max-width: 560px;
+        margin: 0 auto;
+        padding: 24px 16px 120px;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 4px;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 14px;
+        margin: 0 0 16px;
+      }
+      .ring {
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        border: 4px solid var(--accent);
+        margin: 8px auto 16px;
+        opacity: 0.35;
+        transition: opacity 0.2s;
+      }
+      .ring.on {
+        opacity: 1;
+        box-shadow: 0 0 24px var(--accent);
+      }
+      #log {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .msg {
+        padding: 10px 12px;
+        border-radius: 12px;
+        max-width: 88%;
+        background: var(--card);
+        border: 1px solid var(--line);
+      }
+      .you {
+        align-self: flex-end;
+        background: var(--you);
+      }
+      .tool {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 4px;
+      }
+      form {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: var(--bg);
+        border-top: 1px solid var(--line);
+        padding: 12px 16px;
+      }
+      .row {
+        max-width: 560px;
+        margin: 0 auto;
+        display: flex;
+        gap: 8px;
+      }
+      input {
+        flex: 1;
+        min-width: 0;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: var(--card);
+        color: var(--ink);
+        font: inherit;
+      }
+      button {
+        padding: 10px 14px;
+        border-radius: 10px;
+        border: 0;
+        background: var(--accent);
+        color: #fff;
+        font: inherit;
+      }
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 0 0 16px;
+      }
+      .chip {
+        background: var(--card);
+        color: var(--ink);
+        border: 1px solid var(--line);
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 14px;
+      }
+      details {
+        margin-bottom: 16px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Quiet Porch, by voice</h1>
+      <p class="sub">
+        A stand-in for the Alexa+ skill: it maps what you say to the same MCP tools Alexa+ would
+        call.
+      </p>
+      <details id="tokbox">
+        <summary>Token</summary>
+        <p>
+          Paste the read or owner token from
+          <code>~/.local/state/quiet-porch/mcp-tokens.json</code>. It stays in this browser.
+        </p>
+        <div class="row">
+          <input id="token" type="password" placeholder="Bearer token" autocomplete="off" /><button
+            id="save"
+            type="button"
+          >
+            Save
+          </button>
+        </div>
+      </details>
+      <div class="ring" id="ring"></div>
+      <div class="chips">
+        <button class="chip" type="button">Is everything okay?</button>
+        <button class="chip" type="button">What happened recently?</button>
+        <button class="chip" type="button">I'm leaving</button>
+        <button class="chip" type="button">Good night</button>
+        <button class="chip" type="button">Stand down</button>
+      </div>
+      <div id="log"></div>
+    </main>
+    <form id="f">
+      <div class="row">
+        <input id="q" placeholder="Ask Quiet Porch…" autocomplete="off" /><button>Ask</button>
+      </div>
+    </form>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let token = '';
+      try {
+        token = localStorage.getItem('qp-token') || '';
+      } catch {}
+      if (!token) $('tokbox').open = true;
+      $('save').onclick = () => {
+        token = $('token').value.trim();
+        try {
+          localStorage.setItem('qp-token', token);
+        } catch {}
+        $('tokbox').open = false;
+      };
+
+      // Phrase -> tool. Order matters: the first match wins.
+      const intents = [
+        [/stand down|stop|all clear|turn (it|everything) off/i, () => ['stand_down', {}]],
+        [/(leaving|going out|away mode|set .*away)/i, () => ['set_mode', { mode: 'away' }]],
+        [
+          /(good ?night|night mode|set .*night|going to bed)/i,
+          () => ['set_mode', { mode: 'night' }],
+        ],
+        [/(i'?m home|back home|home mode|set .*home)/i, () => ['set_mode', { mode: 'home' }]],
+        [
+          /(recent|what happened|history|last night)/i,
+          () => ['list_recent_incidents', { limit: 5 }],
+        ],
+        [/(okay|ok\b|status|everything|safe|what'?s going on)/i, () => ['get_incident_status', {}]],
+      ];
+
+      let id = 0,
+        ready = false;
+      async function rpc(method, params) {
+        const res = await fetch('mcp', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json, text/event-stream',
+            Authorization: `Bearer ${token}`,
+            'MCP-Protocol-Version': '2025-11-25',
+          },
+          body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params }),
+        });
+        if (res.status === 401) throw new Error('The token was not accepted.');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      }
+      async function init() {
+        if (ready) return;
+        await rpc('initialize', {
+          protocolVersion: '2025-11-25',
+          capabilities: {},
+          clientInfo: { name: 'quiet-porch-alexa-sim', version: '0.1.0' },
+        });
+        ready = true;
+      }
+      function add(text, cls, tool) {
+        const d = document.createElement('div');
+        d.className = `msg ${cls || ''}`;
+        d.textContent = text;
+        if (tool) {
+          const t = document.createElement('div');
+          t.className = 'tool';
+          t.textContent = tool;
+          d.appendChild(t);
+        }
+        $('log').appendChild(d);
+        d.scrollIntoView({ block: 'end' });
+      }
+      function speak(text) {
+        try {
+          const u = new SpeechSynthesisUtterance(text);
+          u.rate = 0.95;
+          speechSynthesis.speak(u);
+        } catch {}
+      }
+      async function ask(q) {
+        add(q, 'you');
+        const hit = intents.find(([re]) => re.test(q));
+        if (!hit) {
+          const t =
+            'I can tell you if everything is okay, what happened recently, set the mode, or stand down.';
+          add(t);
+          speak(t);
+          return;
+        }
+        const [name, args] = hit[1]();
+        $('ring').classList.add('on');
+        try {
+          await init();
+          const r = await rpc('tools/call', { name, arguments: args });
+          const text = r.result?.content?.[0]?.text || r.error?.message || 'No answer.';
+          add(text, '', `${name}(${JSON.stringify(args)})`);
+          speak(text);
+        } catch (e) {
+          add(e.message, '', name);
+        } finally {
+          $('ring').classList.remove('on');
+        }
+      }
+      $('f').onsubmit = (e) => {
+        e.preventDefault();
+        const q = $('q').value.trim();
+        if (q) {
+          $('q').value = '';
+          ask(q);
+        }
+      };
+      document.querySelectorAll('.chip').forEach((c) => (c.onclick = () => ask(c.textContent)));
+    </script>
+  </body>
+</html>
