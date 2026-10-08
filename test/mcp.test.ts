@@ -154,6 +154,17 @@ describe('status-mcp over Streamable HTTP', () => {
     expect(bad.body.result.isError).toBe(true);
   });
 
+  it('recent incidents read naturally', async () => {
+    const id = openIncident(db, 'front_yard', 'intruder', 1_000_000 - 60_000)!;
+    db.prepare(
+      "UPDATE incidents SET status = 'cancelled', exit_reason = 'stand_down:mcp' WHERE id = ?",
+    ).run(id);
+    const r = await call('list_recent_incidents');
+    expect(r.body.result.content[0].text).toBe(
+      'intruder in the front yard, 60 seconds ago, ended: it was stood down.',
+    );
+  });
+
   it('stand_down with nothing active says so', async () => {
     const s = await call('stand_down', {}, tokens.owner);
     expect(s.body.result.content[0].text).toBe('Nothing to stand down. All quiet.');

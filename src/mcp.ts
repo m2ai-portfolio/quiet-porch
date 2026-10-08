@@ -83,6 +83,22 @@ interface ToolResult {
   isError?: boolean;
 }
 
+const EXIT_SPOKEN: Record<string, string> = {
+  departure: 'the person left',
+  benign_reclassification: 'it turned out to be nothing',
+  bad_evidence: 'the camera view was unclear',
+  timeout: 'it timed out',
+  restart: 'Quiet Porch restarted',
+  completed: 'the run finished',
+  preempted: 'a person arrived, so it switched to the intruder response',
+};
+
+export function spokenExit(reason: string | null, status: string): string {
+  if (!reason) return status;
+  if (reason.startsWith('stand_down:')) return 'it was stood down';
+  return EXIT_SPOKEN[reason] ?? reason.replace(/_/g, ' ');
+}
+
 function ago(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 90) return `${s} seconds ago`;
@@ -188,7 +204,7 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
         if (!rows.length) return { text: 'No incidents yet.', data: { incidents: [] } };
         const lines = rows.map(
           (r) =>
-            `${r.profile} in the ${r.zone.replace(/_/g, ' ')}, ${ago(now() - r.opened_at)}, ${r.status === 'active' ? 'still active' : `ended: ${(r.exit_reason ?? r.status).replace(/_/g, ' ')}`}.`,
+            `${r.profile} in the ${r.zone.replace(/_/g, ' ')}, ${ago(now() - r.opened_at)}, ${r.status === 'active' ? 'still active' : `ended: ${spokenExit(r.exit_reason, r.status)}`}.`,
         );
         return { text: lines.join(' '), data: { incidents: rows } };
       },
