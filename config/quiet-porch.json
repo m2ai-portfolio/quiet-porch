@@ -24,7 +24,7 @@
     "maxIntruderLevel": 1,
     "cooldownMs": 600000,
     "ownerUserIds": ["mcp:owner"],
-    "interiorLights": [],
+    "interiorLights": ["light.worklights"],
     "zones": {
       "front_yard": {
         "exteriorLight": "switch.patio_light_socket_1",

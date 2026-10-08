@@ -172,5 +172,11 @@ describe('bounded setters and pi_audio (plan v7 section 8)', () => {
       ok: true,
       cls: 'safety',
     });
+    // The Worklights HA light group is the coordinator's interior light (10-08).
+    expect(shipped.entities.get('light.worklights')?.placement).toBe('interior');
+    expect(checkAction(shipped, { entity_id: 'light.worklights', service: 'turn_off' })).toEqual({
+      ok: true,
+      cls: 'safety',
+    });
   });
 });

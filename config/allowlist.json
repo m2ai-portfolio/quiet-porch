@@ -27,6 +27,12 @@
         "play_clip": { "params": { "clip": { "enum": ["bark-5s", "wildlife"] } } },
         "stop": {}
       }
+    },
+    {
+      "entity_id": "light.worklights",
+      "placement": "interior",
+      "zones": [],
+      "services": { "turn_on": {}, "turn_off": {} }
     }
   ]
 }
