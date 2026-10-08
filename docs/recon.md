@@ -230,7 +230,7 @@ mode `away`. Real Bedrock, the live `judgeFrame` path.
 
 - Ring Cam 1 (`front_yard`) sent its first `other_motion` webhooks today (21:06Z and 21:32Z),
   so Other Motion alerts appear to be on. `grep -o '"sub_type":"[a-z_]*"'
-  webhook-events.jsonl | sort | uniq -c` at 21:33Z: human 48, motion 25, other_motion 2.
+webhook-events.jsonl | sort | uniq -c` at 21:33Z: human 48, motion 25, other_motion 2.
 - Both arrived late: `received_after_event_ms` 10724 and 11211. Ring classifies before it
   sends.
 - The recording was not downloadable until 10 to 15 s after receipt (follow-up probe: 416 at
@@ -250,6 +250,7 @@ mode `away`. Real Bedrock, the live `judgeFrame` path.
 ### Step 3 (coordinator + adapters, dry run): built 10-07
 
 Built and tested:
+
 - Schema v3 (`e402ee9`).
 - Ladder and action plans (`ladder.ts`).
 - Coordinator (`coordinator.ts`): guards, write-ahead intents, cleanup, reconcile, boot sweep,
@@ -262,6 +263,7 @@ configured. Every actuator call is a `would_call` in `coordinator.jsonl`. 159 te
 mutation sweep over the 8 escalation and cleanup guards fails at least one test for each.
 
 Not built yet (each one is named in plan v7):
+
 - HA WebSocket `state_changed` watcher for late-command attribution. Null-context reconcile rows
   get only the periodic off and read-back, and only an owner can clear them.
 - The sensor disagreement rule. Covering sensors are unconfirmed, so all zones are Ring-only.
@@ -290,3 +292,53 @@ Not built yet (each one is named in plan v7):
 - Verified 23:07 in a browser against a throwaway instance with demo tokens, which keeps the real
   token out of the transcript: status, stand down, good night (set_mode night), recent.
 - Not verified: a real Echo calling the server. That gate is still open.
+
+## 2026-10-08: step 1 probe readout
+
+Source: `frame-probe.jsonl`, 41 events, 10-07 20:17Z to 10-08 20:36Z. Reproduce with
+`node scripts/probe-readout.ts`. Ring Cam 1 (`...DX7JXR6P`, front_yard) sends `human` and
+`other_motion`; the second camera (`...WSFD7RUV`) sends `motion` only. Every frame is
+`media_origin: recording`.
+
+### Event frame (gate: "Event frame ready within 5 s")
+
+| sub_type     | n   | frame | within 5 s | ready after event (p50 / p90 / max) | webhook delay p50 |
+| ------------ | --- | ----- | ---------- | ----------------------------------- | ----------------- |
+| human        | 20  | 19    | 18         | 2.3 s / 3.6 s / 9.8 s               | 1.2 s             |
+| motion       | 17  | 17    | 14         | 3.5 s / 6.3 s / 6.6 s               | 0.8 s             |
+| other_motion | 4   | 1     | 1          | 1.8 s (the only one)                | 10.9 s            |
+
+- human: 14 of 20 frames on the first request; frame is exactly the event timestamp (0 ms).
+  One miss (10-07 21:05Z: 416 through +5.9 s, before retries ran to +20 s) and one slow
+  (10-08 15:48Z, 9.8 s).
+- motion: 0 of 17 on the first request; always ready on a retry (+2 s or +5 s). The frame is
+  235 to 693 ms after the event, inside the 1000 ms tolerance.
+- other_motion: 3 of 4 arrived about 11 s late and got no event frame. On 10-07 23:12Z (after
+  the +20 s retry change) every request through event +30.9 s was 416, so the 35 s wildlife
+  evidence budget is not always enough. The one fast other_motion (23:19Z, received at 0.96 s)
+  behaved like `human`.
+- Verdict: **passes for human and motion** (35 of 37 got a frame; 32 of 37 within 5 s, all
+  within 10 s). **other_motion is unreliable** (1 of 4).
+
+### Follow-up frames, source A (gate: "Follow-up frames every 5 s during an event")
+
+Requests at receipt +5/+10/+15 s for `now - 2 s` (event +4, +9 and +14 s).
+
+- human (Cam 1): 54 of 54 returned 200, frame within 0 ms of the requested time at +4 and
+  +9 s.
+- motion (camera 2): 42 of 48. The misses are at +9 s (5 of 16 were 416) and one 500 at +4 s.
+- At event +14 s the returned frame is **earlier** than requested in 12 of 18 human and 15 of
+  16 motion events, by up to 4.1 s. The recording ends about 10 to 14 s after the event.
+- Verdict: source A gives fresh frames every 5 s, **but only for the life of one clip
+  (about 10 to 14 s)**. That is under the 20 s dwell L2 needs, and a gap over 10 s resets
+  dwell. A longer loiter is only visible if Ring starts a new clip within 10 s; not yet
+  observed. The ladder stays capped at L1 unless back-to-back clips are shown or source B
+  (live stream) passes. Open question for Matthew.
+
+### Coverage gap
+
+- No Ring webhooks at all from 10-08 00:00Z to 15:00Z (19:00 to 10:00 CDT), so the probe has
+  **no night samples** and there are no overnight decisions to review. The night of 10-06/07
+  did deliver (03Z to 05Z). Cause not checked: Ring motion schedule or mode, no motion, or a
+  delivery failure.
+- Command: per-hour counts of `received_at` in `webhook-events.jsonl`.
