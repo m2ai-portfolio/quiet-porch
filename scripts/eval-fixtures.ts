@@ -4,7 +4,7 @@
 //   <dir>/<name>/frame.jpg + label.json {expect, night, mode, zone, source, note}
 // Usage: node scripts/eval-fixtures.ts [fixture dir]   (Bedrock env vars must be set)
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { bedrockConfigFromEnv, converse } from '../src/bedrock.ts';
@@ -20,8 +20,16 @@ interface Label {
 }
 
 const dir = process.argv[2] ?? join(homedir(), '.local/state/quiet-porch/fixtures/set1');
+const cfgPath = join(import.meta.dirname, '../config/quiet-porch.json');
 const cfg = parsePipelineConfig(
-  JSON.parse(readFileSync(join(import.meta.dirname, '../config/quiet-porch.json'), 'utf8')),
+  JSON.parse(
+    readFileSync(
+      existsSync(cfgPath)
+        ? cfgPath
+        : join(import.meta.dirname, '../config/quiet-porch.example.json'),
+      'utf8',
+    ),
+  ),
 );
 const bedrock = bedrockConfigFromEnv();
 const call = async (c: Parameters<typeof converse>[1]) => (await converse(bedrock, c)).text;

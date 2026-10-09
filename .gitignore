@@ -3,3 +3,6 @@ node_modules/
 .env.*
 *.log
 state/
+
+# Real deployment config (Ring device IDs, public URL). Copy config/quiet-porch.example.json.
+config/quiet-porch.json

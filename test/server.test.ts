@@ -120,7 +120,7 @@ describe('quiet-porch server', () => {
         new URL('../config/allowlist.json', import.meta.url).pathname,
       );
       const raw = JSON.parse(
-        readFileSync(new URL('../config/quiet-porch.json', import.meta.url), 'utf8'),
+        readFileSync(new URL('../config/quiet-porch.example.json', import.meta.url), 'utf8'),
       );
       cfg.coordinator = {
         allowlist,

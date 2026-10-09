@@ -296,8 +296,8 @@ Not built yet (each one is named in plan v7):
 ## 2026-10-08: step 1 probe readout
 
 Source: `frame-probe.jsonl`, 41 events, 10-07 20:17Z to 10-08 20:36Z. Reproduce with
-`node scripts/probe-readout.ts`. Ring Cam 1 (`...DX7JXR6P`, front_yard) sends `human` and
-`other_motion`; the second camera (`...WSFD7RUV`) sends `motion` only. Every frame is
+`node scripts/probe-readout.ts`. Ring Cam 1 (front_yard) sends `human` and
+`other_motion`; the Front Door camera (front_door) sends `motion` only. Every frame is
 `media_origin: recording`.
 
 ### Event frame (gate: "Event frame ready within 5 s")
