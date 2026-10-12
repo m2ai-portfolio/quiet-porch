@@ -113,9 +113,17 @@ export async function listDevices(accessToken: string): Promise<RingDevice[]> {
   return (body.data ?? []).map((d) => ({ id: d.id, name: d.attributes?.name }));
 }
 
+// Whatever response header names a request id (Ring's header name is not in its docs, so match
+// by shape). The friction log cites these ids; absent means the service sent none.
+export function requestIdOf(headers: Headers): string | undefined {
+  return [...headers].find(([k]) => /request-?id/i.test(k))?.[1];
+}
+
 export interface ImageAttempt {
   status: number; // step-1 status on an error, else the step-2 (media GET) status
   step: 1 | 2;
+  request_id?: string; // request id of the step-1 POST, for the friction log
+  media_request_id?: string; // request id of the step-2 media GET, when it has one
   error_code?: string;
   content_type?: string;
   bytes?: number;
@@ -149,16 +157,21 @@ export async function downloadImageAt(
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   const location = r1.headers.get('location');
+  const rid = requestIdOf(r1.headers);
+  const ridField = rid ? { request_id: rid } : {};
   if (!location) {
     const text = await r1.text();
-    return { status: r1.status, step: 1, error_code: errorCode(text) };
+    return { status: r1.status, step: 1, error_code: errorCode(text), ...ridField };
   }
   const r2 = await fetch(location, { signal: AbortSignal.timeout(TIMEOUT_MS) });
   const buf = Buffer.from(await r2.arrayBuffer());
   const mediaTs = Number(r2.headers.get('x-media-timestamp'));
+  const mediaRid = requestIdOf(r2.headers);
   return {
     status: r2.status,
     step: 2,
+    ...ridField,
+    ...(mediaRid ? { media_request_id: mediaRid } : {}),
     ...(r2.ok ? {} : { error_code: errorCode(buf.toString('utf8')) }),
     content_type: r2.headers.get('content-type') ?? undefined,
     bytes: buf.length,
@@ -166,4 +179,30 @@ export async function downloadImageAt(
     media_origin: r2.headers.get('x-media-origin') ?? undefined,
     ...(opts.keepImage && r2.ok ? { image: buf } : {}),
   };
+}
+
+export interface DeviceConfigResponse {
+  status: number;
+  body?: unknown;
+  requestId?: string; // whatever response header names a request id, for the friction log
+}
+
+// GET /v1/devices/{id}/configurations (Ring api-documentation.html, "Device configurations").
+// Returns the status instead of throwing: a refusal is a finding to log, not a crash.
+export async function getDeviceConfigurations(
+  accessToken: string,
+  deviceId: string,
+): Promise<DeviceConfigResponse> {
+  const res = await fetch(`${RING_API}/v1/devices/${encodeURIComponent(deviceId)}/configurations`, {
+    headers: bearer(accessToken),
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  const text = await res.text();
+  let body: unknown;
+  try {
+    body = text ? JSON.parse(text) : undefined;
+  } catch {
+    body = undefined;
+  }
+  return { status: res.status, body, requestId: requestIdOf(res.headers) };
 }

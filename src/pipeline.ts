@@ -77,6 +77,8 @@ export interface PipelineDeps {
   writeProbe: (r: ProbeRecord) => void;
   writeDecision: (r: DecisionRecord) => void;
   saveFrame: (evidenceId: string, jpeg: Buffer) => void;
+  // True for a camera whose video Ring encrypts (F12): no frame is requested, the ledger says blind.
+  isBlind?: (deviceId: string) => boolean;
   // Coordinator hook (plan v7 step 3): every decision with its evidence, dry run included.
   onEvaluation?: (ev: Evaluation) => void;
   // Live house mode (set_mode over status-mcp); the config value until someone sets it.
@@ -245,18 +247,23 @@ export function createPipeline(cfg: PipelineConfig, deps: PipelineDeps) {
         timings,
         dry_run: true,
       };
-      recordDecision(deps.db, {
-        sourceEventId: ev.eventId,
-        evidenceId: rec.evidence_id,
-        zone,
-        kind,
-        reason,
-        perception: rec.perception,
-        critique: rec.critique,
-        dryRun: true,
-      });
+      recordDecision(
+        deps.db,
+        {
+          sourceEventId: ev.eventId,
+          evidenceId: rec.evidence_id,
+          zone,
+          kind,
+          reason,
+          perception: rec.perception,
+          critique: rec.critique,
+          dryRun: true,
+        },
+        clock.now(), // the injected clock, so a replay on virtual time records virtual time
+      );
       deps.writeDecision(rec);
       deps.onEvaluation?.({
+        sourceEventId: ev.eventId,
         zone,
         kind,
         reason,
@@ -269,6 +276,7 @@ export function createPipeline(cfg: PipelineConfig, deps: PipelineDeps) {
     };
 
     if (deps.killed()) return finish('killed', 'kill_switch');
+    if (deps.isBlind?.(ev.deviceId)) return finish('no_evidence', 'blind_encrypted');
     // One evaluation per camera at a time; a burst is logged, not stacked into Ring/Bedrock.
     if (inFlight.has(ev.deviceId)) return finish('log', 'camera_busy');
     inFlight.add(ev.deviceId);
@@ -289,13 +297,17 @@ export function createPipeline(cfg: PipelineConfig, deps: PipelineDeps) {
 
       const imageSha = sha256(frame.jpeg);
       const evidenceId = evidenceIdFor(zone, ev.deviceId, frame.captureTs, imageSha);
-      recordEvidence(deps.db, {
-        evidenceId,
-        zone,
-        source: `ring:${ev.deviceId}`,
-        captureTs: frame.captureTs,
-        imageSha256: imageSha,
-      });
+      recordEvidence(
+        deps.db,
+        {
+          evidenceId,
+          zone,
+          source: `ring:${ev.deviceId}`,
+          captureTs: frame.captureTs,
+          imageSha256: imageSha,
+        },
+        clock.now(),
+      );
 
       const mode = deps.mode?.() ?? cfg.context.mode;
       const j = await judgeFrame(

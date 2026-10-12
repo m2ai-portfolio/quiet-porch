@@ -30,6 +30,7 @@ import {
 } from './crypto.ts';
 import { bedrockConfigFromEnv, converse, type ContentBlock } from './bedrock.ts';
 import { openDb } from './db.ts';
+import { createSourceGuard } from './encryption.ts';
 import { parseMotionEvent } from './frames.ts';
 import { createPipeline, parsePipelineConfig, type PipelineConfig } from './pipeline.ts';
 import {
@@ -38,6 +39,7 @@ import {
   downloadImageAt,
   exchangeCode,
   getAccountId,
+  getDeviceConfigurations,
   listDevices,
   refreshTokens,
   type RingCredentials,
@@ -154,6 +156,25 @@ export function createApp(cfg: Config) {
   const modeStore = cfg.pipeline
     ? fileModeStore(join(cfg.stateDir, 'mode.json'), cfg.pipeline.config.context.mode)
     : undefined;
+  // F12: which cameras Ring encrypts. Refreshed at startup and on a timer by the entry point.
+  const guard = createSourceGuard({
+    devices: async () => {
+      const out: { accountId: string; deviceId: string }[] = [];
+      for (const t of store.all().filter((r) => r.claimed)) {
+        for (const d of await listDevices(t.access_token)) {
+          out.push({ accountId: t.account_id, deviceId: d.id });
+        }
+      }
+      return out;
+    },
+    fetchConfig: (accountId, deviceId) => {
+      const t = store.all().find((r) => r.account_id === accountId && r.claimed);
+      if (!t) return Promise.reject(new Error(`no linked token for ${accountId}`));
+      return getDeviceConfigurations(t.access_token, deviceId);
+    },
+    friction: (r) => jsonl('friction.jsonl')(r),
+    log: (m) => log(m),
+  });
   let coordinator: Coordinator | undefined;
   if (cfg.pipeline && cfg.coordinator && db) {
     const coordLog = jsonl('coordinator.jsonl');
@@ -193,6 +214,7 @@ export function createApp(cfg: Config) {
           jsonl('decisions.jsonl')(r);
           log(`decision: ${r.kind} ${r.reason} zone=${r.zone}${r.would ? ` (${r.would})` : ''}`);
         },
+        isBlind: (deviceId) => guard.isBlind(deviceId),
         saveFrame: (evidenceId, jpeg) => {
           mkdirSync(join(cfg.stateDir, 'frames'), { recursive: true, mode: 0o700 });
           writeFileSync(join(cfg.stateDir, 'frames', `${evidenceId}.jpg`), jpeg, { mode: 0o600 });
@@ -469,12 +491,21 @@ export function createApp(cfg: Config) {
           dryRun: cfg.pipeline!.config.dryRun,
           standDown: (id, by) => coordinator!.standDown(id, by),
           clearReconcile: (row, user) => coordinator!.clearReconcile(row, user),
+          expectMe: (label, minutes, by) => coordinator!.expectMe(label, minutes, by),
+          night: {
+            timezone: cfg.pipeline!.config.timezone,
+            start: cfg.pipeline!.config.nightWindow.start,
+            end: cfg.pipeline!.config.nightWindow.end,
+          },
+          blindZones: () =>
+            guard.blindDevices().map((d) => cfg.pipeline!.config.zones[d] ?? 'an unmapped camera'),
+          isExterior: (id) => cfg.coordinator!.allowlist.entities.get(id)?.placement === 'exterior',
           allowedOrigins: cfg.mcp.allowedOrigins,
           log,
         }).server
       : undefined;
 
-  return { server, store, refreshDue, coordinator, mcp };
+  return { server, store, refreshDue, refreshEncryption: guard.refresh, coordinator, mcp };
 }
 
 function requireEnv(name: string): string {
@@ -503,9 +534,32 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   };
   if (process.env.QUIET_PORCH_PIPELINE !== '0' && existsSync(configPath)) {
     const bedrock = bedrockConfigFromEnv();
+    // One line per model call (request id, tokens, latency) for the friction log (F10).
+    const modelLog = (rec: object) =>
+      appendFileSync(
+        join(cfg.stateDir, 'model-calls.jsonl'),
+        `${JSON.stringify({ logged_at: new Date().toISOString(), model: bedrock.modelId, ...rec })}\n`,
+        { mode: 0o600 },
+      );
+    mkdirSync(cfg.stateDir, { recursive: true, mode: 0o700 });
     cfg.pipeline = {
       config: parsePipelineConfig(raw),
-      converse: async (content) => (await converse(bedrock, content)).text,
+      converse: async (content) => {
+        try {
+          const r = await converse(bedrock, content);
+          modelLog({
+            request_id: r.requestId,
+            latency_ms: r.latencyMs,
+            input_tokens: r.inputTokens,
+            output_tokens: r.outputTokens,
+            stop_reason: r.stopReason,
+          });
+          return r.text;
+        } catch (e) {
+          modelLog({ error: (e as Error).message.slice(0, 300) });
+          throw e;
+        }
+      },
     };
     log(`pipeline: dry run enabled from ${configPath}`);
     if (raw.coordinator) {
@@ -533,7 +587,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       allowedOrigins: (raw.mcp?.allowedOrigins ?? []).filter((o) => typeof o === 'string'),
     };
   }
-  const { server, refreshDue, coordinator, mcp } = createApp(cfg);
+  const { server, refreshDue, refreshEncryption, coordinator, mcp } = createApp(cfg);
   // Boot before accepting events: pending intents become reconcile rows, an open incident
   // closes, exterior actuators are swept off (plan v7 section 7).
   if (coordinator) await coordinator.boot();
@@ -543,6 +597,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     mcp.listen(port, host, () => log(`status-mcp listening on ${host}:${port}/mcp`));
   }
   setInterval(() => void refreshDue(), 60_000);
+  // Encryption can change when Ring rolls out TAKE, so look again every 30 minutes.
+  void refreshEncryption().catch((e) => log(`encryption: FAILED ${(e as Error).message}`));
+  setInterval(
+    () => void refreshEncryption().catch((e) => log(`encryption: FAILED ${(e as Error).message}`)),
+    30 * 60_000,
+  );
   if (coordinator) {
     let ticking = false;
     setInterval(() => {

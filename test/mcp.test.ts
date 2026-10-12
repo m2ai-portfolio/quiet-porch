@@ -30,6 +30,12 @@ describe('status-mcp over Streamable HTTP', () => {
       dryRun: true,
       standDown,
       clearReconcile: () => true,
+      expectMe: vi.fn((label: string, minutes: number | undefined) => ({
+        id: 1,
+        person_label: label,
+        created_at: 1_000_000,
+        expires_at: 1_000_000 + (minutes ?? 10) * 60_000,
+      })),
       allowedOrigins: ['http://10.0.0.46:3470'],
       log: () => {},
       now: () => 1_000_000,
@@ -104,7 +110,7 @@ describe('status-mcp over Streamable HTTP', () => {
     ).toBe(400);
   });
 
-  it('tools/list names the five tools with schemas and annotations', async () => {
+  it('tools/list names the eight tools with schemas and annotations', async () => {
     const r = await rpc('tools/list');
     const names = r.body.result.tools.map((t: { name: string }) => t.name);
     expect(names).toEqual([
@@ -113,6 +119,9 @@ describe('status-mcp over Streamable HTTP', () => {
       'stand_down',
       'set_mode',
       'clear_reconcile',
+      'get_night_report',
+      'get_ledger',
+      'expect_me',
     ]);
     expect(r.body.result.tools[0].annotations.readOnlyHint).toBe(true);
   });

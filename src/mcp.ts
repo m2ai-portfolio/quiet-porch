@@ -7,10 +7,15 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Mode } from './ladder.ts';
+import { EXPECT_DEFAULT_MINUTES, EXPECT_MAX_MINUTES, type Expectation } from './db.ts';
+import { buildLedger, formatLedger, type LedgerSource } from './ledger.ts';
+import { latestNightWindow } from './nightwindow.ts';
+import { nightReport } from './report.ts';
 
 export const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26'];
 const MAX_BODY = 64 * 1024;
 const ALEXA_SIM_HTML = readFileSync(new URL('./alexa-sim.html', import.meta.url), 'utf8');
+const LEDGER_HTML = readFileSync(new URL('./ledger.html', import.meta.url), 'utf8');
 
 export interface McpTokens {
   read: string;
@@ -60,6 +65,17 @@ export interface StatusDeps {
   dryRun: boolean;
   standDown: (incidentId: number, by: string) => Promise<'stopped' | 'not_active'>;
   clearReconcile: (rowId: number, userId: string) => boolean;
+  // "I'm stepping out": the coordinator opens a bounded window in which a person is expected.
+  expectMe: (personLabel: string, minutes: number | undefined, by: string) => Expectation;
+  // Night window the ledger and the morning report cover (config nightWindow + timezone).
+  night?: { timezone: string; start: string; end: string };
+  // Zones whose camera Ring encrypts (F12); the status answer says they are blind.
+  blindZones?: () => string[];
+  // True for an entity placed outside the house; lets the report say "nothing outside".
+  isExterior?: (entityId: string) => boolean;
+  // Where the frames came from; a replay or sandbox ledger is labelled so on every line.
+  source?: LedgerSource;
+  sourceLabel?: string; // e.g. "replay of 2026-10-12", burned into the ledger page header
   allowedOrigins: string[];
   log: (msg: string) => void;
   now?: () => number;
@@ -104,6 +120,15 @@ function ago(ms: number): string {
   if (s < 90) return `${s} seconds ago`;
   if (s < 5400) return `${Math.round(s / 60)} minutes ago`;
   return `${Math.round(s / 3600)} hours ago`;
+}
+
+// Goes into the ledger and the logs: short, one line, printable.
+export function cleanLabel(raw: unknown): string {
+  const t = String(raw ?? '')
+    .replace(/[^\p{L}\p{N} '.,-]/gu, '')
+    .trim()
+    .slice(0, 40);
+  return t || 'someone expected';
 }
 
 function tokenRole(header: string | undefined, tokens: McpTokens): Role | undefined {
@@ -159,6 +184,10 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
           );
         }
         parts.push(`Mode is ${deps.mode.get()}.`);
+        const blind = deps.blindZones?.() ?? [];
+        for (const z of blind) {
+          parts.push(`The ${z.replace(/_/g, ' ')} camera is blind: its video is encrypted.`);
+        }
         if (deps.killed()) parts.push('The kill switch is on, so nothing will be turned on.');
         if (rows.length) parts.push(`${rows.length} device(s) are waiting for an owner check.`);
         if (deps.dryRun) parts.push('Quiet Porch is in dry run: it only logs what it would do.');
@@ -167,6 +196,7 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
           data: {
             active_incident: inc ?? null,
             mode: deps.mode.get(),
+            blind_zones: blind,
             kill_switch: deps.killed(),
             dry_run: deps.dryRun,
             open_reconcile: rows,
@@ -272,6 +302,101 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
           : { text: 'Nothing to clear with that id.', data: { cleared: false } };
       },
     },
+    {
+      name: 'get_night_report',
+      title: 'What happened last night?',
+      description:
+        'The last armed night in one breath: how many events, how many were silent, and one sentence for each one that was handled.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      role: 'read',
+      run: () => {
+        if (!deps.night) return { text: 'The night window is not configured.', isError: true };
+        const span = latestNightWindow(
+          now(),
+          deps.night.start,
+          deps.night.end,
+          deps.night.timezone,
+        );
+        const ledger = buildLedger(db, span, { source: deps.source });
+        const report = nightReport(ledger, span, {
+          ...deps.night,
+          dryRun: deps.dryRun,
+          isExterior: deps.isExterior,
+        });
+        return {
+          text: report.text,
+          data: { ...report, source: deps.source ?? 'clip', dry_run: deps.dryRun },
+        };
+      },
+    },
+    {
+      name: 'get_ledger',
+      title: 'The night ledger',
+      description:
+        'Every event of the last armed night, one line each, with the Ring capture time, evidence age, level reached and why it stopped.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      role: 'read',
+      run: () => {
+        if (!deps.night) return { text: 'The night window is not configured.', isError: true };
+        const span = latestNightWindow(
+          now(),
+          deps.night.start,
+          deps.night.end,
+          deps.night.timezone,
+        );
+        const ledger = buildLedger(db, span, { source: deps.source });
+        const c = ledger.counts;
+        return {
+          text: `${c.events} events, ${c.silent} silent, ${c.handled} handled.`,
+          data: {
+            window: { from: span.from, to: span.to, in_progress: span.inProgress },
+            timezone: deps.night.timezone,
+            source: deps.source ?? 'clip',
+            source_label: deps.sourceLabel ?? null,
+            dry_run: deps.dryRun,
+            counts: c,
+            lines: ledger.lines,
+            text_lines: formatLedger(ledger.lines, deps.night.timezone),
+          },
+        };
+      },
+    },
+    {
+      name: 'expect_me',
+      title: "I'm stepping out",
+      description:
+        'Tell Quiet Porch a person at the door is expected for a bounded time, so it stays quiet and records why. At most 60 minutes. Owner only.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          person_label: { type: 'string', maxLength: 40 },
+          minutes: {
+            type: 'integer',
+            minimum: 1,
+            maximum: EXPECT_MAX_MINUTES,
+            default: EXPECT_DEFAULT_MINUTES,
+          },
+        },
+        additionalProperties: false,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+      role: 'owner',
+      run: (args) => {
+        const label = cleanLabel(args.person_label);
+        const minutes = args.minutes === undefined ? undefined : Number(args.minutes);
+        if (minutes !== undefined && !(minutes >= 1 && minutes <= EXPECT_MAX_MINUTES)) {
+          return { text: `Minutes must be between 1 and ${EXPECT_MAX_MINUTES}.`, isError: true };
+        }
+        const e = deps.expectMe(label, minutes, 'mcp:owner');
+        const mins = Math.round((e.expires_at - e.created_at) / 60_000);
+        return {
+          text: `Okay. I will stay quiet about ${label} for ${mins} minutes, and note each time.`,
+          data: { expectation: e },
+        };
+      },
+    },
   ];
 }
 
@@ -329,7 +454,7 @@ export function createStatusMcp(deps: StatusDeps) {
             capabilities: { tools: { listChanged: false } },
             serverInfo: { name: 'quiet-porch-status', title: 'Quiet Porch', version: '0.1.0' },
             instructions:
-              'Home deterrent status for one house. Use get_incident_status for "is everything okay". stand_down and set_mode need the owner token.',
+              'Home deterrent status for one house. Use get_incident_status for "is everything okay" and get_night_report for "what happened last night". stand_down, set_mode and expect_me need the owner token.',
           },
         };
       }
@@ -400,6 +525,13 @@ export function createStatusMcp(deps: StatusDeps) {
           'Cache-Control': 'no-store',
         });
         return res.end(ALEXA_SIM_HTML);
+      }
+      if (req.method === 'GET' && url.pathname === '/ledger') {
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store',
+        });
+        return res.end(LEDGER_HTML);
       }
       if (url.pathname !== '/mcp') return json(res, 404, { error: 'not found' });
       // DNS-rebinding guard (spec: servers MUST validate Origin when present).

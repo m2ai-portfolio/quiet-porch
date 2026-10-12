@@ -165,7 +165,9 @@
       <div class="ring" id="ring"></div>
       <div class="chips">
         <button class="chip" type="button">Is everything okay?</button>
+        <button class="chip" type="button">What happened last night?</button>
         <button class="chip" type="button">What happened recently?</button>
+        <button class="chip" type="button">I'm stepping out</button>
         <button class="chip" type="button">I'm leaving</button>
         <button class="chip" type="button">Good night</button>
         <button class="chip" type="button">Stand down</button>
@@ -195,16 +197,21 @@
       // Phrase -> tool. Order matters: the first match wins.
       const intents = [
         [/stand down|stop|all clear|turn (it|everything) off/i, () => ['stand_down', {}]],
+        [
+          /stepping out|heading out|expecting (someone|a visitor)/i,
+          () => ['expect_me', { person_label: 'the owner', minutes: 10 }],
+        ],
+        [
+          /(last night|what happened( last night| overnight)?$|overnight|this morning)/i,
+          () => ['get_night_report', {}],
+        ],
         [/(leaving|going out|away mode|set .*away)/i, () => ['set_mode', { mode: 'away' }]],
         [
           /(good ?night|night mode|set .*night|going to bed)/i,
           () => ['set_mode', { mode: 'night' }],
         ],
         [/(i'?m home|back home|home mode|set .*home)/i, () => ['set_mode', { mode: 'home' }]],
-        [
-          /(recent|what happened|history|last night)/i,
-          () => ['list_recent_incidents', { limit: 5 }],
-        ],
+        [/(recent|what happened|history)/i, () => ['list_recent_incidents', { limit: 5 }]],
         [/(okay|ok\b|status|everything|safe|what'?s going on)/i, () => ['get_incident_status', {}]],
       ];
 
@@ -259,7 +266,7 @@
         const hit = intents.find(([re]) => re.test(q));
         if (!hit) {
           const t =
-            'I can tell you if everything is okay, what happened recently, set the mode, or stand down.';
+            'I can tell you if everything is okay, what happened last night or recently, note that you are stepping out, set the mode, or stand down.';
           add(t);
           speak(t);
           return;
