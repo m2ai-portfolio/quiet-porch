@@ -37,7 +37,7 @@ const LEVEL_SERVICE: Record<number, string> = { 2: 'turn_on', 3: 'play_clip', 4:
 
 // What the porch did, level by level, claiming only what a completed action backs up. Level 1
 // (the phone alert) leaves no intent row, so it is stated as the level reached, nothing more.
-function didClauses(l: LedgerLine): string[] {
+function didClauses(l: LedgerLine, isExterior?: (entityId: string) => boolean): string[] {
   if (l.profile === 'wildlife') {
     const ran = l.actions.some((a) => a.service === 'open_valve' && a.status === 'done');
     return [ran ? 'ran the sprinkler' : 'logged it'];
@@ -46,7 +46,15 @@ function didClauses(l: LedgerLine): string[] {
   for (const e of l.levels) {
     if (e.level === 1) continue;
     const at = atSeconds(e.dwell_ms);
-    const ok = e.done.includes(LEVEL_SERVICE[e.level]);
+    // The completed action must be the right service, and for the outside light an exterior
+    // entity (an interior light also uses turn_on).
+    const ok = e.done.some(
+      (d) =>
+        d.service === LEVEL_SERVICE[e.level] &&
+        (e.level !== 2 || !isExterior || isExterior(d.entity_id)),
+    );
+    // An incident still running may simply not have reached this step yet: say nothing.
+    if (!ok && l.stop_reason === 'still active') continue;
     if (e.level === 2)
       out.push(
         ok ? `switched on the outside light${at}` : `could not switch on the outside light${at}`,
@@ -72,12 +80,20 @@ function endClause(l: LedgerLine, tz: string): string {
   if (r === 'still active') return 'It is still going';
   if (r === 'next frame empty') return time ? `The person was gone by ${time}` : 'The person left';
   if (r.startsWith('stood down')) return `You stood it down${at}`;
-  if (r.startsWith('expected')) return 'It turned out to be expected';
+  if (r.startsWith('expected')) {
+    return l.profile === 'wildlife'
+      ? 'A person was in the yard, so it stopped'
+      : 'It turned out to be expected';
+  }
   if (r === 'reclassified harmless') return 'It turned out to be nothing';
   return `It ended${at}: ${r}`;
 }
 
-export function handledSentence(l: LedgerLine, tz: string): string {
+export function handledSentence(
+  l: LedgerLine,
+  tz: string,
+  isExterior?: (entityId: string) => boolean,
+): string {
   const where = `in the ${zoneLabel(l.zone)} at ${spokenTime(l.ts_ring, tz)}`;
   if (l.dry_run) {
     const lv = l.profile === 'wildlife' ? 'a wildlife run' : `level ${l.level}`;
@@ -88,7 +104,7 @@ export function handledSentence(l: LedgerLine, tz: string): string {
     const reached = l.profile === 'wildlife' ? 'tried a wildlife run' : `reached level ${l.level}`;
     return `${subject(l.what)} ${where}. It ${reached}, but some actions did not complete. ${endClause(l, tz)}.`;
   }
-  const did = didClauses(l);
+  const did = didClauses(l, isExterior);
   const first = l.levels.length ? 'It reached level ' + l.level + '.' : '';
   const middle = did.length ? ` It ${joinClauses(did)}.` : first ? ` ${first}` : '';
   return `${subject(l.what)} ${where}.${middle} ${endClause(l, tz)}.`;
@@ -134,7 +150,7 @@ export function nightReport(
     if (counts.handled > 0) {
       // The first follows the colon; the rest start new sentences.
       const sentences = handled.map((l, i) => {
-        const t = handledSentence(l, opts.timezone);
+        const t = handledSentence(l, opts.timezone, opts.isExterior);
         return i === 0 ? t : cap(t);
       });
       parts.push(`${cap(numberWord(counts.handled))} handled: ${sentences.join(' ')}`);
@@ -166,7 +182,7 @@ export function nightReport(
     handled: handled.map((l) => ({
       incident_id: l.incident_id,
       ts_ring: l.ts_ring,
-      sentence: handledSentence(l, opts.timezone),
+      sentence: handledSentence(l, opts.timezone, opts.isExterior),
     })),
   };
 }

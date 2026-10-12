@@ -174,6 +174,8 @@ describe('night tools over Streamable HTTP (F3, F4, F8)', () => {
       expect(r.content[0].text.startsWith(LABEL), name).toBe(true);
       expect(r.structuredContent).toMatchObject({ source: 'replay', source_label: fixture.label });
     }
+    const rep = await call('get_night_report');
+    expect(rep.structuredContent.text.startsWith(LABEL)).toBe(true); // data.text is labelled too
     const refused = await call('stand_down'); // read token on an owner tool
     expect(refused.content[0].text.startsWith(LABEL)).toBe(true);
     expect(refused.isError).toBe(true);

@@ -118,7 +118,7 @@ const BANNED_PHRASES = [
 // thought of ("pistol", "blind", a hyphenated "police-jacket"); a closed list can only ever say
 // what was approved. The banned-word list above stays as a second check on the finished line.
 const COLOURS = new Set([
-  'black', 'white', 'gray', 'grey', 'red', 'blue', 'green', 'brown', 'beige', 'navy',
+  'black', 'white', 'gray', 'grey', 'red', 'blue', 'green', 'beige', 'navy',
   'orange', 'yellow', 'purple', 'pink', 'dark', 'light', 'bright', 'striped', 'plaid',
 ]); // prettier-ignore
 // Only neutral garments. Left out on purpose: dress, skirt and top (imply a gender), hood (reads
@@ -193,6 +193,8 @@ function parseClothing(raw: unknown): Item[] | undefined {
   // The same colour word twice ("white hat and white coat") is refused: one colour, once.
   const used = items.map((i) => i.colour).filter(Boolean);
   if (new Set(used).size !== used.length) return undefined;
+  // The same garment twice ("jacket and black jacket") is refused too.
+  if (new Set(items.map((i) => i.garment)).size !== items.length) return undefined;
   return items;
 }
 
@@ -246,7 +248,7 @@ export interface ComposedLine {
 
 // The template. "You're on camera at <place>." plus, when a clothing slot survived,
 // " I can see <clothing>." and always the closing fact. Nothing else is ever said.
-export function composeLine(
+function compose(
   rawSlots: LineSlots | null | undefined,
   opts: { places?: string[] } = {},
 ): ComposedLine {
@@ -265,6 +267,19 @@ export function composeLine(
   // Second check on the finished line, whatever the slots said.
   if (bannedIn(text).length > 0) return { text: FALLBACK_LINE, usedFallback: true, dropped };
   return { text, usedFallback: false, dropped };
+}
+
+// Whatever the model or the caller hands over, a failure here must not stop the escalation:
+// it falls back to the plain approved line.
+export function composeLine(
+  rawSlots: LineSlots | null | undefined,
+  opts: { places?: string[] } = {},
+): ComposedLine {
+  try {
+    return compose(rawSlots, opts ?? {});
+  } catch {
+    return { text: FALLBACK_LINE, usedFallback: true, dropped: ['slots'] };
+  }
 }
 
 // Playback seam. Wave 2 replaces the stub with Polly synthesis and the Pi speaker.

@@ -23,7 +23,7 @@ export interface LedgerAction {
 export interface LevelEntry {
   level: number;
   evidence_id: string | null; // the frame that earned this level
-  done: string[]; // services that really completed on that frame (status "done"), for the report
+  done: { service: string; entity_id: string }[]; // what really completed on that frame (status "done")
   age_ms: number | null; // age of the frame that earned this level, when we used it
   dwell_ms: number | null; // Ring capture time of that frame minus the first frame's
 }
@@ -286,7 +286,14 @@ export function buildLedger(
       )
       .all(id) as unknown as IntentRow[];
     const first = evs[0];
-    const levels = levelEntries(evs);
+    // Levels come from EVERY outcome row of the incident, not only the rows inside the window:
+    // an incident that began before the window start still has its early levels, ages and outputs.
+    const all = db
+      .prepare(
+        'SELECT level_after, capture_ts AS o_capture, evidence_id AS o_evidence, applied_at FROM event_outcomes WHERE incident_id = ?',
+      )
+      .all(id) as unknown as EventRow[];
+    const levels = levelEntries(all);
     // An output counts as done only if an intent on the frame that earned the level completed.
     // A refused step (kill switch, stale evidence, audio cap) writes no intent, so it shows here
     // as a level with nothing done.
@@ -295,10 +302,10 @@ export function buildLedger(
         .filter(
           (i) => i.status === 'done' && i.evidence_id !== null && i.evidence_id === e.evidence_id,
         )
-        .map((i) => i.service);
+        .map((i) => ({ service: i.service, entity_id: i.entity_id }));
     }
     const top = levels.at(-1);
-    const level = Math.max(0, ...evs.map((r) => r.level_after ?? 0));
+    const level = Math.max(0, ...all.map((r) => r.level_after ?? 0));
     const last = evs.at(-1)!;
     lines.push({
       kind: 'handled',

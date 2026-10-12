@@ -181,4 +181,18 @@ describe('the porch speaks: fixed template, closed vocabulary (F2)', () => {
       expect(composeLine(slots as never).text).toBe(CLEAN);
     }
   });
+
+  it('never throws, whatever it is given, and refuses a garment twice (third pass)', () => {
+    const getter = {
+      get clothing(): string {
+        throw new Error('boom');
+      },
+    };
+    expect(composeLine(getter).text).toBe(FALLBACK_LINE);
+    expect(composeLine({}, null as never).text).toBe(CLEAN);
+    expect(composeLine({ place: 'side gate' }, { places: 'x' as never }).text).toBe(FALLBACK_LINE);
+    expect(composeLine({ clothing: 'jacket and black jacket' }).text).toBe(CLEAN);
+    expect(composeLine({ clothing: 'jacket and jacket' }).text).toBe(CLEAN);
+    expect(composeLine({ clothing: 'brown shirt' }).text).toBe(CLEAN);
+  });
 });

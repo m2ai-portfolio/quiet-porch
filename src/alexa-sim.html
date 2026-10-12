@@ -201,10 +201,16 @@
           localStorage.setItem('qp-token', token);
         } catch {}
         $('tokbox').open = false;
+        ready = false;
+        init().catch(() => {}); // the replay banner shows as soon as the token is saved
       };
 
       // Phrase -> tool. Order matters: the first match wins.
       const intents = [
+        [
+          /(is (this|it)|are (you|we)) (live|real)|real (night|time)/i,
+          () => ['get_incident_status', {}],
+        ],
         [/stand down|stop|all clear|turn (it|everything) off/i, () => ['stand_down', {}]],
         [
           /stepping out|heading out|expecting (someone|a visitor)/i,

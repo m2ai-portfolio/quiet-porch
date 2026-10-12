@@ -10,7 +10,7 @@
 // Known limit: events replay one after another. The live pipeline overlaps events, so evidence
 // ages in a replay are the sequential ones; the exporter prints the differences against the
 // original ledger instead of hiding them.
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import { dirname, resolve, sep } from 'node:path';
 import { createDryRunActuators } from './actuators.ts';
@@ -93,12 +93,28 @@ export function loadFixture(path: string): Fixture {
   const dir = dirname(resolve(path));
   for (const e of fx.events) {
     for (const f of e.frames) {
+      if (!f || typeof f !== 'object')
+        throw new Error(`${path}: a frame of an event is not an object`);
       if (f.file && !f.base64) {
+        if (typeof f.file !== 'string')
+          throw new Error(`${path}: a frame file name must be a string`);
         const full = resolve(dir, f.file);
         // A fixture is data: its frame files must live inside its own folder.
-        if (full !== dir && !full.startsWith(dir + sep)) {
-          throw new Error(`${path}: frame file ${f.file} is outside the fixture folder`);
+        const outside = () =>
+          new Error(`${path}: frame file ${String(f.file)} is outside the fixture folder`);
+        // Lexical check first (a ../ or absolute name never touches the disk), then the real
+        // path, so a symlink inside the folder that points out is refused too.
+        if (typeof f.file !== 'string' || (!full.startsWith(dir + sep) && full !== dir)) {
+          throw outside();
         }
+        let real: string;
+        try {
+          real = realpathSync(full);
+        } catch {
+          throw new Error(`${path}: frame file ${f.file} cannot be read`);
+        }
+        const realDir = realpathSync(dir);
+        if (!real.startsWith(realDir + sep) && real !== realDir) throw outside();
         f.base64 = readFileSync(full).toString('base64');
       }
     }

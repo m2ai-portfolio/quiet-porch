@@ -136,6 +136,18 @@ function labelling(deps: StatusDeps): { prefix: string; extra: object } | undefi
   };
 }
 
+// Structured data of a labelled answer: the source fields, and any `text` field labelled too, so a
+// client that reads data.text instead of the content still sees the replay label.
+function labelled(
+  data: object | undefined,
+  mark: { prefix: string; extra: object } | undefined,
+  said: (t: string) => string,
+): object {
+  const out: Record<string, unknown> = { ...(data ?? {}), ...(mark?.extra ?? {}) };
+  if (mark && typeof out.text === 'string') out.text = said(out.text);
+  return out;
+}
+
 // Goes into the ledger and the logs: short, one line, printable.
 export function cleanLabel(raw: unknown): string {
   const t = String(raw ?? '')
@@ -556,9 +568,7 @@ export function createStatusMcp(deps: StatusDeps) {
             id,
             result: {
               content: [{ type: 'text', text: said(r.text) }],
-              ...(r.data || mark
-                ? { structuredContent: { ...(r.data ?? {}), ...(mark?.extra ?? {}) } }
-                : {}),
+              ...(r.data || mark ? { structuredContent: labelled(r.data, mark, said) } : {}),
               ...(r.isError ? { isError: true } : {}),
             },
           };

@@ -396,5 +396,98 @@ describe('fixture validation (examiner round 1)', () => {
       events: [{ ...fx.events[0], frames: [{ ts_ring: 1, file: '../../etc/hosts' }] }],
     };
     expect(() => loadFixture(write(outside))).toThrow('outside the fixture folder');
+    // a symlink inside the fixture folder that points out of it is refused as well
+    const { symlinkSync } = await import('node:fs');
+    const secret = join(dir, 'secret.txt');
+    writeFileSync(secret, 'SECRETDATA');
+    const folder = join(dir, 'fx');
+    (await import('node:fs')).mkdirSync(folder);
+    symlinkSync(secret, join(folder, 'link.jpg'));
+    const linked = {
+      ...fx,
+      events: [{ ...fx.events[0], frames: [{ ts_ring: 1, file: 'link.jpg' }] }],
+    };
+    const lp = join(folder, 'fixture.json');
+    writeFileSync(lp, JSON.stringify(linked));
+    expect(() => loadFixture(lp)).toThrow('outside the fixture folder');
+  });
+});
+
+describe('ledger honesty, third pass', () => {
+  const fx = loadFixture(fixturePath);
+  const opts = { timezone: TZ, start: '20:00', end: '06:30', dryRun: false };
+  const live = async () => {
+    const r = await runReplay(fx, { keepDb: true });
+    r.db!.exec("UPDATE action_intents SET status = 'done'; UPDATE decisions SET dry_run = 0");
+    return r;
+  };
+  const isExterior = (id: string) => id.startsWith('switch.') || id.startsWith('valve.');
+
+  it('an incident that began before the window start keeps its levels, ages and outputs', async () => {
+    const r = await live();
+    const gate = buildLedger(r.db!, { from: 0, to: 9e15 }).lines.find(
+      (l) => l.profile === 'intruder',
+    )!;
+    const gateStart = gate.ts_ring;
+    // a window that starts after the first person frame: the incident still straddles it
+    const clipped = buildLedger(r.db!, { from: gateStart + 25_000, to: 9e15 }).lines.find(
+      (l) => l.profile === 'intruder',
+    )!;
+    expect(clipped.levels.map((e) => [e.level, e.dwell_ms])).toEqual(
+      gate.levels.map((e) => [e.level, e.dwell_ms]),
+    );
+    expect(clipped.level).toBe(4);
+    expect(handledSentence(clipped, TZ, isExterior)).toBe(handledSentence(gate, TZ, isExterior));
+    expect(handledSentence(clipped, TZ, isExterior)).toContain(
+      'switched on the outside light at 20 seconds',
+    );
+    r.db!.close();
+  });
+
+  it('an incident still running does not say "could not" for a step not yet dispatched', async () => {
+    const r = await live();
+    r.db!.exec(
+      "UPDATE incidents SET status = 'active', exit_reason = NULL, closed_at = NULL WHERE profile = 'intruder'; " +
+        "DELETE FROM action_intents WHERE service = 'open_valve' OR service = 'set_value'",
+    );
+    const gate = buildLedger(r.db!, { from: 0, to: 9e15 }).lines.find(
+      (l) => l.profile === 'intruder',
+    )!;
+    const sentence = handledSentence(gate, TZ, isExterior);
+    expect(sentence).not.toContain('could not');
+    expect(sentence).toContain('It is still going');
+    r.db!.close();
+  });
+
+  it('the outside light needs an exterior entity: an interior turn_on does not count', async () => {
+    const r = await live();
+    r.db!.exec(
+      "DELETE FROM action_intents WHERE entity_id = 'switch.patio_light_socket_1' AND incident_id = (SELECT id FROM incidents WHERE profile = 'intruder')",
+    );
+    r.db!.exec(
+      'INSERT INTO action_intents (intent_id, incident_id, entity_id, service, data, cls, evidence_id, dispatched_at, status) ' +
+        "SELECT 'forged', incident_id, 'light.worklights', 'turn_on', '{}', 'escalation', evidence_id, dispatched_at, 'done' FROM action_intents WHERE service = 'play_clip' LIMIT 1",
+    );
+    const gate = buildLedger(r.db!, { from: 0, to: 9e15 }).lines.find(
+      (l) => l.profile === 'intruder',
+    )!;
+    // the forged interior turn_on sits on the L3 frame, so L2 has nothing done on its own frame
+    expect(handledSentence(gate, TZ, isExterior)).toContain(
+      'could not switch on the outside light',
+    );
+    r.db!.close();
+  });
+
+  it('a wildlife run stopped by an expected person says so without calling the animal expected', async () => {
+    const r = await live();
+    r.db!.exec(
+      "UPDATE incidents SET exit_reason = 'expected:Lutfiya', status = 'cancelled' WHERE profile = 'wildlife'",
+    );
+    const w = buildLedger(r.db!, { from: 0, to: 9e15 }).lines.find(
+      (l) => l.profile === 'wildlife',
+    )!;
+    expect(handledSentence(w, TZ, isExterior)).toContain('A person was in the yard, so it stopped');
+    expect(handledSentence(w, TZ, isExterior)).not.toContain('expected');
+    r.db!.close();
   });
 });
