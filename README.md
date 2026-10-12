@@ -32,7 +32,8 @@ coordinator.ts  -- one active incident, write-ahead intents, cooldowns, cleanup,
    |
    v
 mcp.ts  -- status-mcp, MCP 2025-11-25 over Streamable HTTP, for Alexa+:
-           get_incident_status, list_recent_incidents, stand_down, set_mode
+           get_incident_status, list_recent_incidents, get_night_report, get_ledger,
+           expect_me, stand_down, set_mode, clear_reconcile
 ```
 
 The models never decide timing or act directly: capture time comes from Ring, the profile and
@@ -63,6 +64,41 @@ Tokens and frames are kept in the state directory (default `~/.local/state/quiet
 in the repo.
 
 The simulated Alexa+ client is `src/alexa-sim.html`, served by status-mcp at `/alexa`.
+
+## The night ledger
+
+Silence is the product, and the ledger proves it. Every motion event of the armed night is one
+line with the Ring capture time, what the camera saw, the level reached, the age of the frame the
+level was earned on, the frame source (`clip` today, `replay` for a fixture; `live` and `sandbox` are reserved for live view and the Playground) and why it stopped. A
+lingering person is one line for the whole incident, with the age at every level, so "14 events,
+13 silent, 1 handled" is arithmetic: events = silent + handled.
+
+```
+02:14:07 · person · side gate · L3 (clip) · evidence age 4 s · source clip · stopped: next frame empty 02:14:31
+```
+
+- **Morning report.** `get_night_report` (status-mcp, read token) answers "what happened last
+  night" in one breath, in dry run it says nothing was switched.
+- **Decision-log view.** `get_ledger` feeds the page at `/ledger`; `node scripts/ledger.ts` prints
+  the same lines in a terminal from a copy of the live database.
+- **I'm stepping out.** `expect_me` (owner token) opens a window of at most 60 minutes in which a
+  person at the door is expected. The ladder stays at L0 and each event is a ledger line saying
+  `expected`. Known limit: while the window is open it applies to every person event, so a second,
+  unexpected person during the window is also recorded as expected.
+- **Encrypted cameras.** At startup and every 30 minutes the service reads
+  `e2e_encryption.enabled` for each device. An encrypted camera gets no frame request, and its
+  events show as `blind: camera video is encrypted`. A frame that is not JPEG bytes is refused.
+- **Replay.** `node scripts/replay.ts <fixture.json>` runs a recorded night (webhooks, frames,
+  model answers) through the real pipeline on a virtual clock and checks that three runs in a row
+  give the same ledger. A replay is labelled `source replay` on every line and in the page header.
+  `test/fixtures/synthetic-night.json` is a hand-built night, labelled synthetic.
+  `node scripts/export-fixture.ts` turns a real night from the state directory into a fixture
+  outside the repository and prints how the replay differs from the original.
+- **Spoken line.** `src/voice.ts` composes one line from a fixed template and a banned-word
+  filter. Playback is a stub until the Polly and speaker wiring lands.
+
+Measured frictions with the Ring API, Bedrock and MCP are in
+[`docs/friction-log.md`](docs/friction-log.md).
 
 ## License
 
