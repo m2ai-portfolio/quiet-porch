@@ -1,7 +1,13 @@
 // The morning report: the ledger read back in one breath (F3). Pure text from a Ledger, so the
 // MCP tool, the simulated Alexa+ page and the tests share one wording. Plain, declarative, no
 // superlatives; in dry run it says so instead of claiming anything was switched.
-import { zoneLabel, type Ledger, type LedgerLine } from './ledger.ts';
+import {
+  allActionsDone,
+  zoneLabel,
+  type Ledger,
+  type LedgerLine,
+  type LedgerSource,
+} from './ledger.ts';
 import { spokenClock, spokenTime, type NightSpan } from './nightwindow.ts';
 
 const SMALL = [
@@ -29,7 +35,7 @@ function atSeconds(ms: number | null): string {
 // What the porch did, from the levels earned and the actions logged.
 function didClauses(l: LedgerLine): string[] {
   if (l.profile === 'wildlife') {
-    const ran = l.actions.some((a) => a.service === 'open_valve');
+    const ran = l.actions.some((a) => a.service === 'open_valve' && a.status === 'done');
     return [ran ? 'ran the sprinkler' : 'logged it'];
   }
   const out: string[] = [];
@@ -66,6 +72,10 @@ export function handledSentence(l: LedgerLine, tz: string): string {
     const lv = l.profile === 'wildlife' ? 'a wildlife run' : `level ${l.level}`;
     return `${subject(l.what)} ${where}, ${lv}.`;
   }
+  // Never claim an output that did not go through: say what was reached and that actions failed.
+  if (!allActionsDone(l)) {
+    return `${subject(l.what)} ${where}. It reached level ${l.level}, but some actions did not complete. ${endClause(l, tz)}.`;
+  }
   const did = didClauses(l);
   const middle = did.length ? ` It ${joinClauses(did)}.` : '';
   return `${subject(l.what)} ${where}.${middle} ${endClause(l, tz)}.`;
@@ -87,11 +97,19 @@ export function nightReport(
     end: string;
     dryRun: boolean;
     isExterior?: (entityId: string) => boolean;
+    source?: LedgerSource;
+    sourceLabel?: string;
   },
 ): NightReport {
   const { counts, lines } = ledger;
   const handled = lines.filter((l) => l.kind === 'handled');
-  const prefix = span.inProgress ? 'So far tonight. ' : '';
+  // A replay or sandbox night is never "tonight": it says what it is before it says anything.
+  const prefix =
+    opts.source && opts.source !== 'clip' && opts.source !== 'live'
+      ? `${opts.source === 'replay' ? 'Replay' : 'Sandbox'}, not live${opts.sourceLabel ? `: ${opts.sourceLabel}` : ''}. `
+      : span.inProgress
+        ? 'So far tonight. '
+        : '';
   const parts: string[] = [];
   if (counts.events === 0) {
     parts.push(
@@ -99,9 +117,12 @@ export function nightReport(
     );
   } else {
     parts.push(`${cap(numberWord(counts.events))} ${counts.events === 1 ? 'event' : 'events'}.`);
-    if (counts.handled === 0) parts.push('All silent.');
-    else {
-      parts.push(`${cap(numberWord(counts.silent))} silent.`);
+    // Blind and held events are counted as silent (nothing acted) but never called "silent":
+    // the report says what actually happened to them.
+    const plainSilent = counts.silent - counts.blind - counts.held - counts.expected;
+    if (counts.handled === 0 && plainSilent === counts.events) parts.push('All silent.');
+    else if (plainSilent > 0) parts.push(`${cap(numberWord(plainSilent))} silent.`);
+    if (counts.handled > 0) {
       // The first follows the colon; the rest start new sentences.
       const sentences = handled.map((l, i) => {
         const t = handledSentence(l, opts.timezone);
@@ -109,12 +130,19 @@ export function nightReport(
       });
       parts.push(`${cap(numberWord(counts.handled))} handled: ${sentences.join(' ')}`);
     }
-    if (counts.expected > 0)
+    if (counts.expected > 0) {
       parts.push(`${cap(numberWord(counts.expected))} expected, so it stayed quiet.`);
-    if (counts.blind > 0)
+    }
+    if (counts.held > 0) {
+      parts.push(
+        `${cap(numberWord(counts.held))} held back (kill switch, cooldown or old evidence), nothing acted on.`,
+      );
+    }
+    if (counts.blind > 0) {
       parts.push(
         `${cap(numberWord(counts.blind))} could not be seen: the camera video is encrypted.`,
       );
+    }
   }
   if (opts.dryRun) {
     parts.push('Quiet Porch is in dry run, so nothing was actually switched.');

@@ -473,10 +473,27 @@ export function createExpectation(
   };
 }
 
-export function activeExpectation(db: DatabaseSync, now = Date.now()): Expectation | undefined {
+// A frame counts as expected if it was captured inside the window, give or take this grace
+// before the owner spoke (they say it at the door, the camera has already seen them).
+export const EXPECT_GRACE_MS = 10_000;
+
+// `at` is the Ring capture time of the frame being judged (default: now), so a stale frame is
+// never matched to a window that opened after it was taken.
+export function activeExpectation(
+  db: DatabaseSync,
+  now = Date.now(),
+  at = now,
+): Expectation | undefined {
   return db
     .prepare(
-      'SELECT id, person_label, created_at, expires_at FROM expectations WHERE expires_at > ? ORDER BY id DESC LIMIT 1',
+      'SELECT id, person_label, created_at, expires_at FROM expectations WHERE created_at - ? <= ? AND expires_at > ? AND expires_at > ? ORDER BY id DESC LIMIT 1',
     )
-    .get(now) as Expectation | undefined;
+    .get(EXPECT_GRACE_MS, at, at, now) as Expectation | undefined;
+}
+
+// Ends every open window now; returns how many were open.
+export function cancelExpectations(db: DatabaseSync, now = Date.now()): number {
+  return Number(
+    db.prepare('UPDATE expectations SET expires_at = ? WHERE expires_at > ?').run(now, now).changes,
+  );
 }

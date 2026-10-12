@@ -29,7 +29,7 @@
         background: var(--bg);
         color: var(--ink);
         font:
-          13px/1.6 ui-monospace,
+          clamp(13px, 1.05vw, 17px) / 1.6 ui-monospace,
           SFMono-Regular,
           Menlo,
           Consolas,
@@ -107,6 +107,10 @@
       <div id="lines"></div>
       <div class="rule"></div>
       <p class="tally" id="tally"></p>
+      <p class="sub" id="note">
+        Times are Ring event timestamps. Evidence age is the Ring capture time of the frame to the
+        moment it was used. Served by status-mcp, MCP 2025-11-25 over Streamable HTTP.
+      </p>
       <details id="tokbox">
         <summary>Token</summary>
         <p>
@@ -182,7 +186,7 @@
           if (!d) throw new Error((r.result && r.result.content[0].text) || 'No ledger.');
           $('window').textContent =
             `${stamp(d.window.from, d.timezone)} to ${stamp(d.window.to, d.timezone)} (${d.timezone})` +
-            (d.window.in_progress ? ' · night in progress' : '');
+            (d.window.in_progress && d.source !== 'replay' ? ' · night in progress' : '');
           if (d.source !== 'clip') label(d.source_label || d.source.toUpperCase());
           if (d.dry_run) label('DRY RUN');
           if (!d.text_lines.length) {
@@ -199,7 +203,12 @@
           const c = d.counts;
           $('tally').textContent = `${c.events} events · ${c.silent} silent · ${c.handled} handled`;
         } catch (e) {
-          $('window').textContent = e.message;
+          $('window').textContent =
+            e instanceof TypeError
+              ? 'Cannot reach Quiet Porch. Is the service running?'
+              : e.message === 'HTTP 403'
+                ? 'This address is not allowed by the service (allowedOrigins).'
+                : e.message;
         }
       }
       load();

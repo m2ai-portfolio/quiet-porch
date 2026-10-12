@@ -57,7 +57,15 @@ export function createSourceGuard(deps: GuardDeps) {
   const now = deps.now ?? Date.now;
   const states = new Map<string, DeviceState>();
 
-  async function refresh(): Promise<void> {
+  let running: Promise<void> | undefined;
+
+  // Overlapping calls share one run, so a slow refresh cannot overwrite a newer one.
+  function refresh(): Promise<void> {
+    running ??= run().finally(() => (running = undefined));
+    return running;
+  }
+
+  async function run(): Promise<void> {
     let list: { accountId: string; deviceId: string }[];
     try {
       list = await deps.devices();
@@ -72,8 +80,11 @@ export function createSourceGuard(deps: GuardDeps) {
       } catch (e) {
         res = { status: 0, body: { error: (e as Error).message } };
       }
-      const video = assessConfiguration(res.status, res.body);
+      const read = assessConfiguration(res.status, res.body);
       const prev = states.get(d.deviceId)?.video;
+      // One failed read (HTTP 500, timeout) must not turn a blind camera readable for half an
+      // hour: blind stays blind until a read says readable.
+      const video = prev === 'blind' && read === 'unknown' ? 'blind' : read;
       states.set(d.deviceId, {
         account_id: d.accountId,
         device_id: d.deviceId,

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createDryRunActuators } from '../src/actuators.ts';
 import { loadAllowlist } from '../src/allowlist.ts';
 import { createCoordinator, type Evaluation } from '../src/coordinator.ts';
-import { activeIncident, EXPECT_MAX_MINUTES, openDb } from '../src/db.ts';
+import { activeIncident, EXPECT_GRACE_MS, EXPECT_MAX_MINUTES, openDb } from '../src/db.ts';
 import type { ActuatorConfig } from '../src/ladder.ts';
 import { fakeClock } from './helpers/fake-clock.ts';
 
@@ -65,6 +65,16 @@ function setup() {
     db.prepare('SELECT COUNT(*) AS n FROM action_intents').get() as { n: number };
   return { db, clock, coord, person, outcomes, intents };
 }
+
+const wildlife = (s: ReturnType<typeof setup>): Evaluation => ({
+  sourceEventId: 'w1',
+  zone: 'front_yard',
+  kind: 'wildlife',
+  reason: 'nuisance_at_night',
+  species: 'armadillo',
+  evidenceId: 'evw',
+  captureTs: s.clock.now() - 1000,
+});
 
 describe('expect_me, "I\'m stepping out"', () => {
   it('without a window a person opens the ladder, and the outcome records the level', async () => {
@@ -145,5 +155,78 @@ describe('expect_me, "I\'m stepping out"', () => {
     await s.coord.standDown(activeIncident(s.db)!.id, 'test');
     await s.coord.onEvaluation(s.person());
     expect(s.outcomes().at(-1)).toMatchObject({ outcome: 'not_opened', note: 'intruder_cooldown' });
+  });
+});
+
+describe('expect_me corner cases the examiner found', () => {
+  it('a person during a wildlife run inside the window still stops the sprinkler, and starts no ladder', async () => {
+    const s = setup();
+    await s.coord.onEvaluation(wildlife(s));
+    await s.coord.idle();
+    const valve = () =>
+      s.db
+        .prepare("SELECT service FROM action_intents WHERE entity_id LIKE 'valve.%' ORDER BY id")
+        .all()
+        .map((r) => (r as { service: string }).service);
+    expect(valve()).toContain('open_valve');
+    s.coord.expectMe('Lutfiya', 10, 'mcp:owner');
+    await s.coord.onEvaluation(s.person());
+    await s.coord.idle();
+    expect(valve()).toContain('close_valve');
+    expect(activeIncident(s.db)).toBeUndefined();
+    expect(s.db.prepare('SELECT status, exit_reason FROM incidents').get()).toEqual({
+      status: 'cancelled',
+      exit_reason: 'expected:Lutfiya',
+    });
+  });
+
+  it('an expected end sets no cooldown, so a real person after the window is not ignored', async () => {
+    const s = setup();
+    await s.coord.onEvaluation(s.person());
+    await s.coord.idle();
+    s.coord.expectMe('A', 1, 'mcp:owner');
+    await s.coord.onEvaluation(s.person()); // ends the running incident as expected
+    await s.coord.idle();
+    expect(activeIncident(s.db)).toBeUndefined();
+    await s.clock.advance(61_000);
+    await s.coord.onEvaluation(s.person());
+    await s.coord.idle();
+    expect(activeIncident(s.db)?.level).toBe(1);
+    expect(s.outcomes().at(-1)).toMatchObject({ outcome: 'incident' });
+  });
+
+  it('is judged on the frame capture time, not on when it was evaluated', async () => {
+    const s = setup();
+    const stale: Evaluation = { ...s.person(), captureTs: s.clock.now() - 3_600_000 };
+    s.coord.expectMe('Lutfiya', 10, 'mcp:owner');
+    await s.coord.onEvaluation(stale);
+    await s.coord.idle();
+    expect(s.outcomes()[0]).toMatchObject({ outcome: 'incident' }); // not "expected"
+    const s2 = setup();
+    s2.coord.expectMe('Lutfiya', 10, 'mcp:owner');
+    const justBefore: Evaluation = {
+      ...s2.person(),
+      captureTs: s2.clock.now() - EXPECT_GRACE_MS + 1000,
+    };
+    await s2.coord.onEvaluation(justBefore);
+    expect(s2.outcomes()[0]).toMatchObject({ outcome: 'expected' });
+  });
+
+  it('cancelExpectation ends the window now', async () => {
+    const s = setup();
+    s.coord.expectMe('Lutfiya', 60, 'mcp:owner');
+    expect(s.coord.cancelExpectation('mcp:owner')).toBe(1);
+    expect(s.coord.cancelExpectation('mcp:owner')).toBe(0);
+    await s.clock.advance(1000);
+    await s.coord.onEvaluation(s.person());
+    await s.coord.idle();
+    expect(activeIncident(s.db)?.level).toBe(1);
+  });
+
+  it('chained windows are the owner explicitly asking again; the newest one wins until cancelled', async () => {
+    const s = setup();
+    s.coord.expectMe('A', 60, 'mcp:owner');
+    s.coord.expectMe('B', 1, 'mcp:owner');
+    expect(s.coord.cancelExpectation('mcp:owner')).toBe(2); // one call ends them all
   });
 });

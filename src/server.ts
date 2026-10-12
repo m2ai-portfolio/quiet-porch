@@ -492,6 +492,7 @@ export function createApp(cfg: Config) {
           standDown: (id, by) => coordinator!.standDown(id, by),
           clearReconcile: (row, user) => coordinator!.clearReconcile(row, user),
           expectMe: (label, minutes, by) => coordinator!.expectMe(label, minutes, by),
+          cancelExpectation: (by) => coordinator!.cancelExpectation(by),
           night: {
             timezone: cfg.pipeline!.config.timezone,
             start: cfg.pipeline!.config.nightWindow.start,

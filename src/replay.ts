@@ -72,6 +72,20 @@ export function loadFixture(path: string): Fixture {
   if (fx.version !== 1 || !Array.isArray(fx.events) || typeof fx.label !== 'string') {
     throw new Error(`${path}: not a version 1 fixture`);
   }
+  if (!['home', 'away', 'night'].includes(fx.mode)) {
+    throw new Error(`${path}: mode must be home, away or night, got "${String(fx.mode)}"`);
+  }
+  fx.events.forEach((e, i) => {
+    if (!Number.isFinite(e.received_at)) throw new Error(`${path}: event ${i} has no received_at`);
+    if (i > 0 && e.received_at < fx.events[i - 1].received_at) {
+      throw new Error(
+        `${path}: event ${i} is earlier than event ${i - 1}; events must be in order`,
+      );
+    }
+    if (!parseMotionEvent(e.webhook, e.received_at)) {
+      throw new Error(`${path}: event ${i} is not a motion_detected webhook`);
+    }
+  });
   const dir = dirname(resolve(path));
   for (const e of fx.events) {
     for (const f of e.frames) {

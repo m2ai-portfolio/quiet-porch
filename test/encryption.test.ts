@@ -170,3 +170,41 @@ describe('pipeline with a blind camera', () => {
     db.close();
   });
 });
+
+describe('source guard stability (examiner round 1)', () => {
+  const body = (enabled: boolean) => ({ data: { attributes: { e2e_encryption: { enabled } } } });
+
+  it('a blind camera stays blind through one failed read, and flips only on an explicit readable', async () => {
+    let next: { status: number; body?: unknown } = { status: 200, body: body(true) };
+    const guard = createSourceGuard({
+      devices: async () => [{ accountId: 'a', deviceId: 'd' }],
+      fetchConfig: async () => next,
+      friction: () => {},
+      log: () => {},
+    });
+    await guard.refresh();
+    next = { status: 500 };
+    await guard.refresh();
+    expect(guard.isBlind('d')).toBe(true);
+    expect(guard.states()[0].http_status).toBe(500);
+    next = { status: 200, body: body(false) };
+    await guard.refresh();
+    expect(guard.isBlind('d')).toBe(false);
+  });
+
+  it('overlapping refreshes share one run', async () => {
+    let calls = 0;
+    const guard = createSourceGuard({
+      devices: async () => [{ accountId: 'a', deviceId: 'd' }],
+      fetchConfig: async () => {
+        calls++;
+        return { status: 200, body: body(true) };
+      },
+      friction: () => {},
+      log: () => {},
+    });
+    await Promise.all([guard.refresh(), guard.refresh(), guard.refresh()]);
+    expect(calls).toBe(1);
+    expect(guard.isBlind('d')).toBe(true);
+  });
+});

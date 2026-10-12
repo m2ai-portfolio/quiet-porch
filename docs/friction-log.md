@@ -29,7 +29,7 @@ Times: `Z` is UTC, `CDT` is America/Chicago. Dates are 2026.
 - **Observed:** 10-07 20:17Z to 10-08 20:36Z, 41 events (`docs/recon.md`, "step 1 probe readout").
 - **Request ID:** not captured.
 - **Finding:** `human`: 14 of 20 frames on the first request, ready after the event p50 2.3 s, p90 3.6 s, max 9.8 s. `motion`: 0 of 17 on the first request, always ready on a retry at +2 s or +5 s (p50 3.5 s, p90 6.3 s, max 6.6 s). One `human` event (10-07 21:05Z) answered `416` through +5.9 s.
-- **Cost:** a one-shot fetch at the webhook misses the frame; a 5 s freshness rule is met 32 of 37 times; 35 of 37 events got a frame at all, all 35 within 10 s.
+- **Cost:** a one-shot fetch at the webhook misses the frame; a 5 s freshness rule is met 32 of 37 times; by the readout table 36 of the 37 `human` and `motion` events got a frame (19 of 20 and 17 of 17; recon's own verdict line says 35 of 37), all within 10 s.
 - **Workaround:** retry at receipt +0/2/5/8/12/16/20 s (`PROBE_OFFSETS_MS`, `src/frames.ts`); a 200 counts only if it is a `recording` within 1 s of the event and not after receipt (`checkEventFrame`).
 - **Reproduce:** `node scripts/probe-readout.ts`.
 
@@ -80,7 +80,7 @@ Times: `Z` is UTC, `CDT` is America/Chicago. Dates are 2026.
 - **Request ID:** webhook `meta.request_id`.
 - **Finding:** from `attributes.timestamp` to receipt: min 708 ms, p50 1079 ms, p90 1335 ms, max 30720 ms.
 - **Workaround:** the ledger records Ring capture time and the age of every frame, so a late webhook shows as an older frame, never as a fresher one.
-- **Reproduce:** `webhook-events.jsonl`, `received_at` minus `body.data.attributes.timestamp`.
+- **Reproduce:** `jq -r '(.received_at | sub("\\.[0-9]+Z$";"Z") | fromdate) - (.body.data.attributes.timestamp / 1000)' webhook-events.jsonl | sort -n` (whole seconds, from the webhook log).
 
 ### F-07 Webhook gap with no explanation
 
@@ -89,7 +89,7 @@ Times: `Z` is UTC, `CDT` is America/Chicago. Dates are 2026.
 - **Request ID:** none, nothing arrived.
 - **Finding:** the probe has no night samples for that span. Cause not checked: Ring motion schedule or mode, no motion, or a delivery failure.
 - **Workaround:** none. A quiet night and a dead webhook look the same in the ledger today.
-- **Reproduce:** per-hour counts of `received_at` in `webhook-events.jsonl`.
+- **Reproduce:** `jq -r '.received_at[0:13]' webhook-events.jsonl | sort | uniq -c` (webhooks per hour, UTC).
 
 ### F-08 The account-link flow starts in the Ring AppStore, not in the console
 
@@ -109,7 +109,7 @@ Times: `Z` is UTC, `CDT` is America/Chicago. Dates are 2026.
 - **Finding:** Ring documents that for an encrypted device video requests succeed and return content the app cannot read. The configurations response is the only place the flag appears in the documentation read; it is not in the `include=configurations` table.
 - **Cost:** without a check, an encrypted camera would look like a camera that saw nothing.
 - **Workaround:** the service reads the flag at startup and every 30 minutes; an encrypted camera gets no frame request and its events are ledger lines marked `blind: camera video is encrypted`. A frame that is not JPEG bytes is refused as `not_jpeg_bytes` even when the flag could not be read. The Playground sandbox switch is not built: its base URL and token flow are not in `api-documentation.html`.
-- **Reproduce:** `friction.jsonl`; `test/encryption.test.ts`.
+- **Reproduce:** `test/encryption.test.ts` for the logic; on the real service, `grep e2e_encryption friction.jsonl` once the build has run.
 
 ### F-10 Every image carries a Ring watermark
 
@@ -117,8 +117,9 @@ Times: `Z` is UTC, `CDT` is America/Chicago. Dates are 2026.
 - **Observed:** 10-06, every image.
 - **Request ID:** not captured.
 - **Finding:** the watermark holds a device ID suffix, "Partner: Quiet Porch" and the generation time.
-- **Cost:** it is in the frames Bedrock sees and in any footage we show; whether it counts as a third-party mark under the hackathon rules is an open question to the hackathon manager.
-- **Workaround:** none; the watermark stays on screen in the video.
+- **Cost:** it is in the frames Bedrock sees and in any footage we show. Whether it counts as a third-party mark under the hackathon rules is an open question (project brief, section 9); the brief's plan is to leave it on screen.
+- **Workaround:** none.
+- **Reproduce:** `docs/recon.md`, "Stored image download"; any frame saved to `~/.local/state/quiet-porch/frames/`.
 
 ### F-11 Sandbox and Playground details are missing from the API documentation
 
@@ -126,13 +127,14 @@ Times: `Z` is UTC, `CDT` is America/Chicago. Dates are 2026.
 - **Observed:** 2026-10-11, `api-documentation.html` read in full for `e2e_encryption`, TAKE and Playground.
 - **Finding:** the page lists one API host, `https://api.amazonvision.com`, and no sandbox host or sandbox token flow; "TAKE" appears only as a link to the developer FAQ.
 - **Workaround:** none in code. How to reach the Playground is not in the documentation read, so the sandbox switch in F-09 is blocked on that answer.
+- **Reproduce:** open `api-documentation.html` and search for `sandbox`, `Playground`, `TAKE`; only the production host and a FAQ link turn up.
 
 ## Amazon Bedrock
 
 ### F-12 JSON comes back inside a code fence
 
 - **Endpoint:** Bedrock Converse, `global.anthropic.claude-sonnet-4-6`, region `us-east-1`, bearer-key auth.
-- **Observed:** 10-06 (gate); every perception call since.
+- **Observed:** 10-06 (gate), recorded in `docs/recon.md`; the parser has handled the fence on every call since without a logged failure.
 - **Request ID:** not captured before 2026-10-11; `model-calls.jsonl` from then on.
 - **Finding:** with "Return ONLY a JSON object" in the prompt the model still wraps it in a json code fence. First call: `200` in 2428 ms, 378 input and 69 output tokens.
 - **Cost:** `JSON.parse` fails on the raw text.
@@ -156,6 +158,7 @@ Times: `Z` is UTC, `CDT` is America/Chicago. Dates are 2026.
 - **Observed:** curl and a browser against the simulated page at `/alexa` on 10-07; the ledger tools (`get_night_report`, `get_ledger`, `expect_me`) added 2026-10-11.
 - **Finding:** protocol behaviour (initialize, `tools/list`, 401 without a token, 405 on GET, Origin check) is covered by `test/mcp.test.ts` and `test/mcp-night.test.ts`. No real Echo or Alexa+ client has called the server, so friction on that side is unmeasured.
 - **Workaround:** the simulated page maps spoken phrases to the same tools.
+- **Reproduce:** `npx vitest run test/mcp.test.ts test/mcp-night.test.ts`.
 
 ## Amazon Polly
 
@@ -163,6 +166,7 @@ Times: `Z` is UTC, `CDT` is America/Chicago. Dates are 2026.
 
 - **Endpoint:** Polly generative voices (voice ID to be chosen on day one of the voice work).
 - **Finding:** nothing measured. The line composer and banned-word filter (`src/voice.ts`) exist behind a stub; the Polly call and its latency (target under 3 s, cached fallback phrase) are Wave 2.
+- **Reproduce:** `npx vitest run test/voice.test.ts` covers the composer only.
 
 ## Product feedback for Amazon
 

@@ -6,12 +6,12 @@
 // refused inside the repository. The first replay becomes expected_ledger, and the differences
 // against the original night's ledger are printed (ages differ by design, see src/replay.ts).
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { buildLedger } from '../src/ledger.ts';
 import { compareLedgers, exportFixture } from '../src/export-fixture.ts';
 import type { Mode } from '../src/ladder.ts';
 import { runReplay } from '../src/replay.ts';
-import { arg, configPath, DEFAULT_STATE_DIR, openDbCopy } from './lib.ts';
+import { arg, configPath, DEFAULT_STATE_DIR, isInside, openDbCopy } from './lib.ts';
 
 function need(name: string): string {
   const v = arg(name);
@@ -33,7 +33,7 @@ const jsonl = (path: string): Record<string, unknown>[] =>
 const stateDir = arg('state-dir') ?? DEFAULT_STATE_DIR;
 const repo = resolve(import.meta.dirname, '..');
 const out = resolve(need('out').replace(/^~/, process.env.HOME ?? '~'));
-if (!relative(repo, out).startsWith('..')) {
+if (isInside(repo, out)) {
   console.error('refusing to write a fixture (household frames) inside the repository');
   process.exit(2);
 }

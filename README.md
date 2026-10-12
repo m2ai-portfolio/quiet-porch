@@ -4,8 +4,8 @@ An AI home deterrent for the Amazon Developer Hackathon (Build, Ship, Shape, 202
 Alexa+ tracks, with Amazon Bedrock for the AWS Builder mini-challenge.
 
 A Ring motion event becomes a judged, logged decision. A person who is still there at night
-gets a calm, escalating response (interior lights, then exterior light, a short bark clip, a
-sprinkler), and an armadillo in the yard gets the sprinkler. Benign events (deliveries, cars,
+gets a calm, escalating response (interior lights, then exterior light, a short audio clip that
+is being replaced by a calm spoken line, a sprinkler), and an armadillo in the yard gets the sprinkler. Benign events (deliveries, cars,
 pets) get no action at all. Every decision is logged with its frame and timestamps, and an
 owner can stand everything down from a signed Stop link or by asking Alexa.
 
@@ -26,7 +26,7 @@ pipeline.ts
    |
    v
 coordinator.ts  -- one active incident, write-ahead intents, cooldowns, cleanup, reconcile
-   ladder.ts      L1 interior lights + notify, L2 exterior light, L3 bark clip, L4 sprinkler
+   ladder.ts      L1 interior lights + notify, L2 exterior light, L3 short audio clip (spoken line in progress), L4 sprinkler
    allowlist.ts   every Home Assistant call checked; locks, covers and alarms are never allowed
    actuators.ts   Home Assistant REST, Pi speaker, Telegram (or a dry-run simulator)
    |
@@ -82,20 +82,28 @@ lingering person is one line for the whole incident, with the age at every level
 - **Decision-log view.** `get_ledger` feeds the page at `/ledger`; `node scripts/ledger.ts` prints
   the same lines in a terminal from a copy of the live database.
 - **I'm stepping out.** `expect_me` (owner token) opens a window of at most 60 minutes in which a
-  person at the door is expected. The ladder stays at L0 and each event is a ledger line saying
-  `expected`. Known limit: while the window is open it applies to every person event, so a second,
-  unexpected person during the window is also recorded as expected.
+  person at the door is expected; `expect_me` with `cancel: true` ends it. The ladder stays at L0
+  and each event is a ledger line saying `expected`. A running ladder or sprinkler run ends and
+  cleans up. Known limits: the window applies to every person event in every zone, so a second,
+  unexpected person during the window is also recorded as expected; a frame counts if it was
+  captured inside the window (or up to 10 seconds before it was opened).
 - **Encrypted cameras.** At startup and every 30 minutes the service reads
   `e2e_encryption.enabled` for each device. An encrypted camera gets no frame request, and its
   events show as `blind: camera video is encrypted`. A frame that is not JPEG bytes is refused.
 - **Replay.** `node scripts/replay.ts <fixture.json>` runs a recorded night (webhooks, frames,
   model answers) through the real pipeline on a virtual clock and checks that three runs in a row
   give the same ledger. A replay is labelled `source replay` on every line and in the page header.
+  `node scripts/serve-replay.ts <fixture.json>` serves a replay to `/ledger` and `/alexa`
+  (read-only, labelled "replay, not live" on both pages and in every spoken answer).
   `test/fixtures/synthetic-night.json` is a hand-built night, labelled synthetic.
   `node scripts/export-fixture.ts` turns a real night from the state directory into a fixture
   outside the repository and prints how the replay differs from the original.
 - **Spoken line.** `src/voice.ts` composes one line from a fixed template and a banned-word
   filter. Playback is a stub until the Polly and speaker wiring lands.
+
+Events that were judged actionable but held back (kill switch, cooldown, old evidence) show as
+`held`, never as silent; a camera Ring encrypts shows as `blind`. The morning report never claims
+a switched output that failed.
 
 Measured frictions with the Ring API, Bedrock and MCP are in
 [`docs/friction-log.md`](docs/friction-log.md).

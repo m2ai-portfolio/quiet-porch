@@ -119,6 +119,14 @@
         color: #fff;
         font: inherit;
       }
+      .label {
+        border: 2px solid var(--accent);
+        color: var(--accent);
+        padding: 2px 10px;
+        margin: 0 0 12px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }
       .chips {
         display: flex;
         flex-wrap: wrap;
@@ -162,6 +170,7 @@
           </button>
         </div>
       </details>
+      <div class="label" id="src" hidden></div>
       <div class="ring" id="ring"></div>
       <div class="chips">
         <button class="chip" type="button">Is everything okay?</button>
@@ -199,7 +208,7 @@
         [/stand down|stop|all clear|turn (it|everything) off/i, () => ['stand_down', {}]],
         [
           /stepping out|heading out|expecting (someone|a visitor)/i,
-          () => ['expect_me', { person_label: 'the owner', minutes: 10 }],
+          () => ['expect_me', { person_label: 'you', minutes: 10 }],
         ],
         [
           /(last night|what happened( last night| overnight)?$|overnight|this morning)/i,
@@ -277,10 +286,25 @@
           await init();
           const r = await rpc('tools/call', { name, arguments: args });
           const text = r.result?.content?.[0]?.text || r.error?.message || 'No answer.';
+          // A replayed or sandbox night is labelled on the page, not only in the spoken text.
+          const sc = r.result?.structuredContent;
+          if (sc && sc.source && sc.source !== 'clip' && sc.source !== 'live') {
+            $('src').textContent =
+              `${sc.source.toUpperCase()}, NOT LIVE${sc.source_label ? ': ' + sc.source_label : ''}`;
+            $('src').hidden = false;
+          }
           add(text, '', `${name}(${JSON.stringify(args)})`);
           speak(text);
         } catch (e) {
-          add(e.message, '', name);
+          add(
+            e instanceof TypeError
+              ? 'I cannot reach Quiet Porch. Is the service running?'
+              : e.message === 'HTTP 403'
+                ? 'This address is not allowed by the service (allowedOrigins).'
+                : e.message,
+            '',
+            name,
+          );
         } finally {
           $('ring').classList.remove('on');
         }

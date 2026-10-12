@@ -7,9 +7,10 @@
 // Every time on a line is a Ring capture time or a time we acted on one; ages are the gap.
 import type { DatabaseSync } from 'node:sqlite';
 import { logTime, type NightSpan } from './nightwindow.ts';
+import { SUBJECT_CLASSES } from './perception.ts';
 
 export type LedgerSource = 'clip' | 'live' | 'replay' | 'sandbox';
-export type LineKind = 'silent' | 'expected' | 'blind' | 'handled';
+export type LineKind = 'silent' | 'held' | 'expected' | 'blind' | 'handled';
 
 export interface LedgerAction {
   service: string;
@@ -53,6 +54,7 @@ export interface LedgerCounts {
   handled: number;
   expected: number;
   blind: number;
+  held: number; // a person or animal was judged actionable, but something held the porch back
 }
 
 export interface Ledger {
@@ -126,6 +128,17 @@ export function describeSilent(kind: string | null, reason: string | null): stri
   return known[r] ?? (r.replace(/_/g, ' ') || 'logged');
 }
 
+// Why a person or animal judged actionable still got no action (coordinator outcome notes).
+export function describeHeld(note: string | null): string {
+  const known: Record<string, string> = {
+    kill_switch: 'held: kill switch on, nothing acted',
+    intruder_cooldown: 'held: cooldown after the last run, nothing acted',
+    wildlife_cooldown: 'held: cooldown after the last run, nothing acted',
+    stale_evidence: 'held: evidence too old, nothing acted',
+  };
+  return known[note ?? ''] ?? `held: ${(note ?? 'unknown').replace(/_/g, ' ')}, nothing acted`;
+}
+
 export function describeExit(reason: string | null, status: string): string {
   if (status === 'active' || !reason) return 'still active';
   if (reason.startsWith('stand_down:'))
@@ -150,7 +163,9 @@ function whatOf(perception: string | null, subtype: string | null, kind: string 
   try {
     const p = JSON.parse(perception) as { subjects?: { class: string; confidence: number }[] };
     const top = [...(p.subjects ?? [])].sort((a, b) => b.confidence - a.confidence)[0];
-    return top ? top.class : 'nothing';
+    // Model text never reaches the ledger unless it is one of the classes we asked for.
+    if (!top) return 'nothing';
+    return (SUBJECT_CLASSES as readonly string[]).includes(top.class) ? top.class : 'unreadable';
   } catch {
     return 'unreadable';
   }
@@ -225,8 +240,9 @@ export function buildLedger(
     }
     const expected = r.outcome === 'expected';
     const blind = r.reason === 'blind_encrypted';
+    const held = r.outcome === 'not_opened';
     lines.push({
-      kind: expected ? 'expected' : blind ? 'blind' : 'silent',
+      kind: expected ? 'expected' : blind ? 'blind' : held ? 'held' : 'silent',
       ts_ring: r.ts,
       device_id: r.device ?? '',
       subtype: r.subtype ?? 'unknown',
@@ -240,7 +256,9 @@ export function buildLedger(
       actions: [],
       stop_reason: expected
         ? `expected (${r.note ?? 'owner said so'}), ladder stayed at L0`
-        : describeSilent(r.kind, r.reason),
+        : held
+          ? describeHeld(r.note)
+          : describeSilent(r.kind, r.reason),
       stopped_at: null,
       incident_id: null,
       profile: null,
@@ -306,6 +324,7 @@ export function buildLedger(
       handled,
       expected: lines.filter((l) => l.kind === 'expected').length,
       blind: lines.filter((l) => l.kind === 'blind').length,
+      held: lines.filter((l) => l.kind === 'held').length,
     },
   };
 }
@@ -364,4 +383,10 @@ export function formatLedgerLine(l: LedgerLine, timeZone: string): string[] {
 
 export function formatLedger(lines: LedgerLine[], timeZone: string): string[] {
   return lines.flatMap((l) => formatLedgerLine(l, timeZone));
+}
+
+// True when every action the run tried actually went through (a dry run counts as through:
+// it is labelled as a dry run everywhere else).
+export function allActionsDone(l: LedgerLine): boolean {
+  return l.actions.every((a) => a.status === 'done' || a.status === 'dry_run');
 }

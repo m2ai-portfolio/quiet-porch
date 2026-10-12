@@ -30,6 +30,7 @@ describe('status-mcp over Streamable HTTP', () => {
       dryRun: true,
       standDown,
       clearReconcile: () => true,
+      cancelExpectation: () => 0,
       expectMe: vi.fn((label: string, minutes: number | undefined) => ({
         id: 1,
         person_label: label,

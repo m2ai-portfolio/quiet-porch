@@ -67,6 +67,7 @@ export interface StatusDeps {
   clearReconcile: (rowId: number, userId: string) => boolean;
   // "I'm stepping out": the coordinator opens a bounded window in which a person is expected.
   expectMe: (personLabel: string, minutes: number | undefined, by: string) => Expectation;
+  cancelExpectation: (by: string) => number;
   // Night window the ledger and the morning report cover (config nightWindow + timezone).
   night?: { timezone: string; start: string; end: string };
   // Zones whose camera Ring encrypts (F12); the status answer says they are blind.
@@ -175,6 +176,9 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
           t: number | null;
         };
         const parts: string[] = [];
+        if (deps.source && deps.source !== 'clip' && deps.source !== 'live') {
+          parts.push(`${deps.source === 'replay' ? 'Replay' : 'Sandbox'}, not live.`);
+        }
         if (!inc) parts.push('All quiet. No active incident.');
         else if (inc.profile === 'wildlife') {
           parts.push(`A wildlife run is in progress in the ${inc.zone.replace(/_/g, ' ')}.`);
@@ -197,6 +201,8 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
             active_incident: inc ?? null,
             mode: deps.mode.get(),
             blind_zones: blind,
+            source: deps.source ?? 'clip',
+            source_label: deps.sourceLabel ?? null,
             kill_switch: deps.killed(),
             dry_run: deps.dryRun,
             open_reconcile: rows,
@@ -323,10 +329,17 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
           ...deps.night,
           dryRun: deps.dryRun,
           isExterior: deps.isExterior,
+          source: deps.source,
+          sourceLabel: deps.sourceLabel,
         });
         return {
           text: report.text,
-          data: { ...report, source: deps.source ?? 'clip', dry_run: deps.dryRun },
+          data: {
+            ...report,
+            source: deps.source ?? 'clip',
+            source_label: deps.sourceLabel ?? null,
+            dry_run: deps.dryRun,
+          },
         };
       },
     },
@@ -367,7 +380,7 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
       name: 'expect_me',
       title: "I'm stepping out",
       description:
-        'Tell Quiet Porch a person at the door is expected for a bounded time, so it stays quiet and records why. At most 60 minutes. Owner only.',
+        'Tell Quiet Porch a person at the door is expected for a bounded time, so it stays quiet and records why. At most 60 minutes; pass cancel true to end the window. Owner only.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -384,12 +397,32 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
       role: 'owner',
       run: (args) => {
-        const label = cleanLabel(args.person_label);
-        const minutes = args.minutes === undefined ? undefined : Number(args.minutes);
-        if (minutes !== undefined && !(minutes >= 1 && minutes <= EXPECT_MAX_MINUTES)) {
-          return { text: `Minutes must be between 1 and ${EXPECT_MAX_MINUTES}.`, isError: true };
+        const known = new Set(['person_label', 'minutes', 'cancel']);
+        const stray = Object.keys(args).find((k) => !known.has(k));
+        if (stray) return { text: `I do not know the argument ${stray}.`, isError: true };
+        if (args.cancel === true) {
+          const n = deps.cancelExpectation('mcp:owner');
+          return {
+            text: n ? 'Okay. I will watch for visitors again.' : 'There was no window to cancel.',
+            data: { cancelled: n },
+          };
         }
-        const e = deps.expectMe(label, minutes, 'mcp:owner');
+        if (args.cancel !== undefined) return { text: 'Cancel must be true.', isError: true };
+        const m = args.minutes;
+        if (
+          m !== undefined &&
+          !(typeof m === 'number' && Number.isInteger(m) && m >= 1 && m <= EXPECT_MAX_MINUTES)
+        ) {
+          return {
+            text: `Minutes must be a whole number from 1 to ${EXPECT_MAX_MINUTES}.`,
+            isError: true,
+          };
+        }
+        if (args.person_label !== undefined && typeof args.person_label !== 'string') {
+          return { text: 'The label must be text.', isError: true };
+        }
+        const label = cleanLabel(args.person_label);
+        const e = deps.expectMe(label, m, 'mcp:owner');
         const mins = Math.round((e.expires_at - e.created_at) / 60_000);
         return {
           text: `Okay. I will stay quiet about ${label} for ${mins} minutes, and note each time.`,
@@ -487,6 +520,14 @@ export function createStatusMcp(deps: StatusDeps) {
               isError: true,
             },
           };
+        }
+        if (
+          params.arguments !== undefined &&
+          (typeof params.arguments !== 'object' ||
+            params.arguments === null ||
+            Array.isArray(params.arguments))
+        ) {
+          return rpcError(id, -32602, 'arguments must be an object');
         }
         const args = (params.arguments ?? {}) as Record<string, unknown>;
         try {

@@ -2,6 +2,7 @@
 // every ledger path: silent events, an intruder ladder from L1 to L4 that ends on an empty
 // frame, and a wildlife run. Its label says so. A real night comes from scripts/export-fixture.ts.
 // Usage: node scripts/synthetic-fixture.ts
+import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { checkReplay, type Fixture, type FixtureEvent } from '../src/replay.ts';
 
@@ -123,6 +124,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   fx.expected_ledger = runs[0];
   const out = new URL('../test/fixtures/synthetic-night.json', import.meta.url).pathname;
   writeFileSync(out, JSON.stringify(fx, null, 2) + '\n');
+  execFileSync('npx', ['prettier', '--write', out], { stdio: 'ignore' }); // match the committed file
   console.log(`wrote ${out}`);
   console.log(runs[0].join('\n'));
 }

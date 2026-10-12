@@ -14,6 +14,7 @@ import { checkAction, CLEANUP_SERVICE, domainOf, type Allowlist } from './allowl
 import {
   activeExpectation,
   activeIncident,
+  cancelExpectations,
   closeIncident,
   completeIntent,
   convertPendingIntents,
@@ -418,7 +419,9 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
 
   // The owner said the person is expected: the intruder ladder stays at L0 for this event.
   function expectedWindow(ev: Evaluation): Expectation | undefined {
-    return ev.kind === 'intruder' ? activeExpectation(db, clock.now()) : undefined;
+    return ev.kind === 'intruder'
+      ? activeExpectation(db, clock.now(), ev.captureTs ?? clock.now())
+      : undefined;
   }
 
   // ---- step execution (inside the action chain) ----
@@ -487,12 +490,13 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     id: number,
     status: 'cancelled' | 'exited',
     reason: string,
-    opts: { cleanupEntities?: boolean } = {},
+    opts: { cleanupEntities?: boolean; cooldown?: boolean } = {},
   ): Promise<void> {
     const inc = incidentById(id);
     if (!inc || inc.status !== 'active') return;
     closeIncident(db, id, status, reason, clock.now()); // version bump: queued steps abort
-    setCooldown(inc.zone, inc.profile);
+    // An "expected" end is the owner's word, not a run that needs a cool-off.
+    if (opts.cooldown !== false) setCooldown(inc.zone, inc.profile);
     log({ event: 'incident_closed', incident_id: id, status, reason, profile: inc.profile });
     if (opts.cleanupEntities === false) return;
     for (let i = reverts.length - 1; i >= 0; i--)
@@ -624,7 +628,20 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
       if (inc.profile === 'wildlife') {
         if (ev.kind === 'intruder') {
           const exp = expectedWindow(ev);
-          if (exp) return suppress(ev, exp);
+          if (exp) {
+            // Someone is in the yard: the sprinkler stops either way. Expected means no
+            // ladder, not that the valve keeps running.
+            outcome(ev, {
+              kind: 'expected',
+              incidentId: inc.id,
+              level: 0,
+              note: exp.person_label,
+            });
+            log({ event: 'expected_ends_wildlife', incident_id: inc.id, person: exp.person_label });
+            return endIncident(inc.id, 'cancelled', `expected:${exp.person_label}`, {
+              cooldown: false,
+            });
+          }
           return preempt(inc, ev);
         }
         log({ event: 'during_wildlife', incident_id: inc.id, kind: ev.kind, reason: ev.reason });
@@ -640,7 +657,9 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
           note: exp.person_label,
         });
         log({ event: 'expected_ends_incident', incident_id: inc.id, person: exp.person_label });
-        return endIncident(inc.id, 'cancelled', `expected:${exp.person_label}`);
+        return endIncident(inc.id, 'cancelled', `expected:${exp.person_label}`, {
+          cooldown: false,
+        });
       }
       return advance(inc, ev);
     }
@@ -716,6 +735,13 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     );
     log({ event: 'expect_me', person: personLabel, until: e.expires_at, by });
     return e;
+  }
+
+  // Ends every open expect_me window now. Returns how many were open.
+  function cancelExpectation(by: string): number {
+    const n = cancelExpectations(db, clock.now());
+    log({ event: 'expect_me_cancelled', windows: n, by });
+    return n;
   }
 
   async function tick(): Promise<void> {
@@ -819,6 +845,7 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     tick,
     clearReconcile,
     expectMe,
+    cancelExpectation,
     idle: () => Promise.all([evalChain, actionChain]).then(() => undefined),
   };
 }

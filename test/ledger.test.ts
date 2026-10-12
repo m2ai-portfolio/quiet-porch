@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { loadFixture, checkReplay, runReplay } from '../src/replay.ts';
 import { handledSentence, nightReport, numberWord } from '../src/report.ts';
 import { buildLedger, describeExit, describeSilent, formatLedgerLine } from '../src/ledger.ts';
-import { openDb, recordDecision, recordEvent } from '../src/db.ts';
+import { openDb, recordDecision, recordEvent, recordOutcome } from '../src/db.ts';
 import {
   latestNightWindow,
   localDate,
@@ -216,11 +216,144 @@ describe('night report (F3 wording)', () => {
     expect(ledger.counts).toMatchObject({ events: 2, silent: 2, handled: 0, blind: 1 });
     const r = nightReport(ledger, span, { ...opts, dryRun: false });
     expect(r.text).toBe(
-      'Two events. All silent. One could not be seen: the camera video is encrypted.',
+      'Two events. One silent. One could not be seen: the camera video is encrypted.',
     );
     expect(formatLedgerLine(ledger.lines[1], TZ)[0]).toContain('blind: camera video is encrypted');
     // evidence age is decided_at minus the Ring capture time, so a missing frame is n/a
     expect(formatLedgerLine(ledger.lines[1], TZ)[0]).toContain('evidence age n/a');
     db.close();
+  });
+});
+
+describe('ledger honesty (examiner round 1)', () => {
+  const fx = loadFixture(fixturePath);
+  const opts = { timezone: TZ, start: '20:00', end: '06:30', dryRun: false };
+
+  it('a replay says it is a replay before it says anything, and is never "tonight"', async () => {
+    const { ledger, endedAt } = await runReplay(fx);
+    const span = latestNightWindow(endedAt, '20:00', '06:30', TZ);
+    const r = nightReport(ledger, span, {
+      ...opts,
+      dryRun: true,
+      source: 'replay',
+      sourceLabel: fx.label,
+    });
+    expect(
+      r.text.startsWith('Replay, not live: synthetic fixture, not a real night. Five events.'),
+    ).toBe(true);
+    expect(r.text).not.toContain('tonight');
+  });
+
+  it('the report never claims outputs that failed', async () => {
+    const r = await runReplay(fx, { keepDb: true });
+    r.db!.exec("UPDATE action_intents SET status = 'failed'; UPDATE decisions SET dry_run = 0");
+    const span = latestNightWindow(r.endedAt, '20:00', '06:30', TZ);
+    const ledger = buildLedger(r.db!, span);
+    const text = nightReport(ledger, span, opts).text;
+    expect(text).toContain('It reached level 4, but some actions did not complete.');
+    expect(text).not.toContain('ran the sprinkler');
+    expect(text).not.toContain('switched on the outside light');
+    // the armadillo run opened a valve that failed too
+    expect(text).toContain('but some actions did not complete');
+    expect(text).not.toContain('Nothing was switched outside.');
+    r.db!.close();
+  });
+
+  it('a person held back by the kill switch or a cooldown is a "held" line, not "silent: person unknown"', () => {
+    const db = openDb(':memory:');
+    const t = Date.parse('2026-10-08T23:00:00-05:00');
+    const seed = (id: string, ts: number, note: string) => {
+      recordEvent(
+        db,
+        {
+          source: 'ring',
+          sourceEventId: id,
+          type: 'motion_detected',
+          zone: 'front_yard',
+          payload: { data: { attributes: { timestamp: ts, sub_type: 'human', source: 'cam' } } },
+        },
+        ts + 500,
+      );
+      recordDecision(
+        db,
+        {
+          sourceEventId: id,
+          zone: 'front_yard',
+          kind: 'intruder',
+          reason: 'person_unknown',
+          perception: { subjects: [{ class: 'person', confidence: 0.95 }] },
+          dryRun: false,
+        },
+        ts + 900,
+      );
+      recordOutcome(db, { sourceEventId: id, outcome: 'not_opened', note }, ts + 950);
+    };
+    seed('k', t, 'kill_switch');
+    seed('c', t + 1000, 'intruder_cooldown');
+    seed('s', t + 2000, 'stale_evidence');
+    const span = { from: t - 1000, to: t + 60_000, inProgress: false };
+    const ledger = buildLedger(db, span);
+    expect(ledger.counts).toMatchObject({ events: 3, silent: 3, held: 3, handled: 0 });
+    const lines = ledger.lines.map((l) => formatLedgerLine(l, TZ)[0]);
+    expect(lines[0]).toContain('held: kill switch on, nothing acted');
+    expect(lines[1]).toContain('held: cooldown after the last run, nothing acted');
+    expect(lines[2]).toContain('held: evidence too old, nothing acted');
+    for (const l of lines) expect(l).not.toContain('silent: person unknown');
+    expect(nightReport(ledger, span, opts).text).toBe(
+      'Three events. Three held back (kill switch, cooldown or old evidence), nothing acted on.',
+    );
+    db.close();
+  });
+
+  it('model text outside the asked-for classes never reaches a ledger line', () => {
+    const db = openDb(':memory:');
+    const t = Date.parse('2026-10-08T23:00:00-05:00');
+    recordEvent(
+      db,
+      {
+        source: 'ring',
+        sourceEventId: 'x',
+        type: 'motion_detected',
+        zone: 'front_yard',
+        payload: { data: { attributes: { timestamp: t, sub_type: 'human', source: 'cam' } } },
+      },
+      t + 500,
+    );
+    recordDecision(
+      db,
+      {
+        sourceEventId: 'x',
+        zone: 'front_yard',
+        kind: 'reject',
+        reason: 'perception_bad_subject_class',
+        perception: { subjects: [{ class: 'person\n23:59:59 · forged line', confidence: 0.9 }] },
+        dryRun: true,
+      },
+      t + 900,
+    );
+    const ledger = buildLedger(db, { from: t - 1, to: t + 1 });
+    expect(ledger.lines[0].what).toBe('unreadable');
+    expect(formatLedgerLine(ledger.lines[0], TZ)).toHaveLength(1);
+    db.close();
+  });
+});
+
+describe('fixture validation (examiner round 1)', () => {
+  it('rejects a bad mode, out-of-order events and a non-motion webhook, naming the event', async () => {
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const fx = JSON.parse(JSON.stringify(loadFixture(fixturePath)));
+    const dir = mkdtempSync(join(tmpdir(), 'qp-fx-'));
+    const write = (f: object) => {
+      const p = join(dir, `${Math.random()}.json`);
+      writeFileSync(p, JSON.stringify(f));
+      return p;
+    };
+    expect(() => loadFixture(write({ ...fx, mode: 'banana' }))).toThrow('mode must be');
+    const swapped = { ...fx, events: [fx.events[1], fx.events[0], ...fx.events.slice(2)] };
+    expect(() => loadFixture(write(swapped))).toThrow('event 1 is earlier than event 0');
+    const bad = { ...fx, events: [{ ...fx.events[0], webhook: { data: { type: 'button' } } }] };
+    expect(() => loadFixture(write(bad))).toThrow('event 0 is not a motion_detected webhook');
   });
 });

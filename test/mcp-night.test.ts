@@ -11,6 +11,7 @@ describe('night tools over Streamable HTTP (F3, F4, F8)', () => {
   let base: string;
   let close: () => void;
   let closeDb: () => void;
+  const cancelExpectation = vi.fn(() => 1);
   const expectMe = vi.fn((label: string, minutes: number | undefined) => ({
     id: 1,
     person_label: label,
@@ -20,6 +21,7 @@ describe('night tools over Streamable HTTP (F3, F4, F8)', () => {
 
   beforeEach(async () => {
     expectMe.mockClear();
+    cancelExpectation.mockClear();
     const r = await runReplay(fixture, { keepDb: true });
     const mode: ModeStore = { get: () => 'away', set: () => {} };
     const { server } = createStatusMcp({
@@ -31,6 +33,7 @@ describe('night tools over Streamable HTTP (F3, F4, F8)', () => {
       standDown: async () => 'stopped',
       clearReconcile: () => true,
       expectMe,
+      cancelExpectation,
       night: { timezone: 'America/Chicago', start: '20:00', end: '06:30' },
       source: 'replay',
       sourceLabel: fixture.label,
@@ -72,7 +75,7 @@ describe('night tools over Streamable HTTP (F3, F4, F8)', () => {
     const r = await call('get_night_report');
     expect(Date.now() - t0).toBeLessThan(2000);
     expect(r.content[0].text).toMatch(
-      /^So far tonight\. Five events\. Three silent\. Two handled: /,
+      /^Replay, not live: synthetic fixture, not a real night\. Five events\. Three silent\. Two handled: /,
     );
     expect(r.content[0].text).toContain('dry run');
     expect(r.structuredContent.counts).toMatchObject({ events: 5, silent: 3, handled: 2 });
@@ -110,6 +113,41 @@ describe('night tools over Streamable HTTP (F3, F4, F8)', () => {
     expect(cleanLabel('a'.repeat(100))).toHaveLength(40);
   });
 
+  it('expect_me refuses typos, wrong types and non-object arguments, and can be cancelled', async () => {
+    for (const args of [
+      {},
+      { minute: 5 },
+      { minutes: '10' },
+      { minutes: 1.5 },
+      { minutes: true },
+      { minutes: [5] },
+      { person_label: 7, minutes: 5 },
+      { cancel: 'yes' },
+    ]) {
+      const r = await call('expect_me', args, tokens.owner);
+      // {} is the one call that is valid: ten minutes, default label
+      if (Object.keys(args).length === 0) expect(r.isError).toBeUndefined();
+      else expect(r.isError, JSON.stringify(args)).toBe(true);
+    }
+    expect(expectMe).toHaveBeenCalledTimes(1);
+    const res = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokens.owner}` },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 99,
+        method: 'tools/call',
+        params: { name: 'expect_me', arguments: 'x' },
+      }),
+    });
+    expect((await res.json()).error.code).toBe(-32602);
+    const c = await call('expect_me', { cancel: true }, tokens.owner);
+    expect(cancelExpectation).toHaveBeenCalledWith('mcp:owner');
+    expect(c.content[0].text).toBe('Okay. I will watch for visitors again.');
+    const denied = await call('expect_me', { cancel: true });
+    expect(denied.isError).toBe(true);
+  });
+
   it('serves the ledger page without auth and without a token inside it', async () => {
     const res = await fetch(`${base}/ledger`);
     expect(res.status).toBe(200);
@@ -132,6 +170,7 @@ describe('status with a blind camera (F12)', () => {
       standDown: async () => 'not_active',
       clearReconcile: () => false,
       expectMe: vi.fn(),
+      cancelExpectation: () => 0,
       blindZones: () => ['front_door'],
       allowedOrigins: [],
       log: () => {},

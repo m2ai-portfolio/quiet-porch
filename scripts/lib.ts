@@ -1,7 +1,7 @@
 // Shared by the ledger and export scripts: read a live state directory without touching it.
-import { copyFileSync, existsSync, mkdtempSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { openDb } from '../src/db.ts';
 
@@ -27,4 +27,24 @@ export function arg(name: string, argv = process.argv): string | undefined {
 export function configPath(): string {
   const real = join(import.meta.dirname, '../config/quiet-porch.json');
   return existsSync(real) ? real : join(import.meta.dirname, '../config/quiet-porch.example.json');
+}
+
+// The path with every symlink resolved, even when the tail does not exist yet: resolve the
+// nearest existing ancestor for real, then append what is left. "/var/x" and "/private/var/x"
+// come out the same, and a symlink into the repo is seen for what it is.
+export function canonicalPath(path: string): string {
+  let head = resolve(path);
+  const tail: string[] = [];
+  while (!existsSync(head)) {
+    tail.unshift(head.slice(dirname(head).length + 1));
+    head = dirname(head);
+  }
+  return join(realpathSync(head), ...tail);
+}
+
+// True when `child` is `parent` or anywhere below it, after resolving real paths. A name that
+// merely starts with two dots ("..household") is a normal child, not an escape.
+export function isInside(parent: string, child: string): boolean {
+  const rel = relative(canonicalPath(parent), canonicalPath(child));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
