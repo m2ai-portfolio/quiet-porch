@@ -8,7 +8,7 @@ const tokens = { read: 'read-token-0123456789', owner: 'owner-token-0123456789' 
 const LABEL = 'Replay, not live: synthetic fixture, not a real night. ';
 const fixture = loadFixture(new URL('./fixtures/synthetic-night.json', import.meta.url).pathname);
 
-describe('night tools over Streamable HTTP (F3, F4, F8)', () => {
+describe('night tools over Streamable HTTP', () => {
   let base: string;
   let close: () => void;
   let closeDb: () => void;
@@ -222,7 +222,7 @@ describe('night tools over Streamable HTTP (F3, F4, F8)', () => {
   });
 });
 
-describe('status with a blind camera (F12)', () => {
+describe('status with a blind camera', () => {
   it('says which camera is blind and why, in the voice answer', async () => {
     const db = openDb(':memory:');
     const tools = createStatusTools({

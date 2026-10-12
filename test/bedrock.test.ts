@@ -66,7 +66,7 @@ describe('converse', () => {
   });
 });
 
-describe('request ids for the friction log (F10)', () => {
+describe('request ids for the friction log', () => {
   const ok = (headers: Record<string, string>) =>
     (async () =>
       new Response(

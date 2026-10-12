@@ -70,7 +70,7 @@ export interface StatusDeps {
   cancelExpectation: (by: string) => number;
   // Night window the ledger and the morning report cover (config nightWindow + timezone).
   night?: { timezone: string; start: string; end: string };
-  // Zones whose camera Ring encrypts (F12); the status answer says they are blind.
+  // Zones whose camera Ring encrypts; the status answer says they are blind.
   blindZones?: () => string[];
   // True for an entity placed outside the house; lets the report say "nothing outside".
   isExterior?: (entityId: string) => boolean;

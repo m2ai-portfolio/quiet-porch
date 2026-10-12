@@ -1,4 +1,4 @@
-// Turns a recorded night in the live database into a replay fixture (F9). Read-only: it takes
+// Turns a recorded night in the live database into a replay fixture. Read-only: it takes
 // an open database, a window of Ring event times and the config, and returns a Fixture plus the
 // list of frame files to copy. The model answers it stores are the ones Bedrock actually gave
 // (decisions.perception / decisions.critique), so a replay judges the same way the night did.

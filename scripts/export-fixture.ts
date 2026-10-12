@@ -1,4 +1,4 @@
-// Export a recorded night from the live state directory into a replay fixture (F9).
+// Export a recorded night from the live state directory into a replay fixture.
 // Usage: node scripts/export-fixture.ts --from 2026-10-18T01:00:00-05:00 --to 2026-10-18T03:00:00-05:00 \
 //          --label "replay of 2026-10-18" --out ~/.local/state/quiet-porch/fixtures/nights/side-gate \
 //          [--state-dir dir] [--mode away]

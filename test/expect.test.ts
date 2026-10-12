@@ -159,7 +159,7 @@ describe('expect_me, "I\'m stepping out"', () => {
   });
 });
 
-describe('expect_me corner cases the examiner found', () => {
+describe('expect_me corner cases found in review', () => {
   it('a person during a wildlife run inside the window still stops the sprinkler, and starts no ladder', async () => {
     const s = setup();
     await s.coord.onEvaluation(wildlife(s));

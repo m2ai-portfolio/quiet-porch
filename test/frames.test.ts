@@ -248,7 +248,7 @@ describe('downloadImageAt', () => {
   });
 });
 
-describe('encrypted video still answers 200 (Ring docs, F12)', () => {
+describe('encrypted video still answers 200 (Ring docs)', () => {
   it('a 200 whose bytes are not a JPEG is refused as not_jpeg_bytes', () => {
     const t = 1_791_400_000_000;
     const base = {
@@ -267,7 +267,7 @@ describe('encrypted video still answers 200 (Ring docs, F12)', () => {
   });
 });
 
-describe('downloadImageAt request ids (F10)', () => {
+describe('downloadImageAt request ids', () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it('keeps the request id of the step-1 POST, on success and on a refusal', async () => {

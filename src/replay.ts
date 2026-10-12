@@ -1,4 +1,4 @@
-// Night fixture replay (F9). A fixture is a recorded incident: the original webhook bodies and
+// Night fixture replay. A fixture is a recorded incident: the original webhook bodies and
 // frames with their Ring timestamps, and the model answers Bedrock gave. Replaying it runs the
 // REAL pipeline, ladder and coordinator (dry-run actuators) on a virtual clock, with the model
 // and the Ring download replaced by the recording. The same fixture therefore produces the same
@@ -292,7 +292,7 @@ export interface ReplayCheck {
   problems: string[];
 }
 
-// The F9 acceptance: N runs in a row produce the same ledger lines, equal to the fixture's own.
+// The acceptance check: N runs in a row produce the same ledger lines, equal to the fixture's own.
 export async function checkReplay(fx: Fixture, times = 3): Promise<ReplayCheck> {
   const runs: string[][] = [];
   for (let i = 0; i < times; i++) runs.push((await runReplay(fx)).lines);

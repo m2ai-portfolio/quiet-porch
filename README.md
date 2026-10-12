@@ -4,8 +4,8 @@ An AI home deterrent for the Amazon Developer Hackathon (Build, Ship, Shape, 202
 Alexa+ tracks, with Amazon Bedrock for the AWS Builder mini-challenge.
 
 A Ring motion event becomes a judged, logged decision. A person who is still there at night
-gets a calm, escalating response (interior lights, then exterior light, a short audio clip that
-is being replaced by a calm spoken line, a sprinkler), and an armadillo in the yard gets the sprinkler. Benign events (deliveries, cars,
+gets a calm, escalating response (interior lights, then exterior light, a short bark clip, a
+sprinkler), and an armadillo in the yard gets the sprinkler. Benign events (deliveries, cars,
 pets) get no action at all. Every decision is logged with its frame and timestamps, and an
 owner can stand everything down from a signed Stop link or by asking Alexa.
 
@@ -26,7 +26,7 @@ pipeline.ts
    |
    v
 coordinator.ts  -- one active incident, write-ahead intents, cooldowns, cleanup, reconcile
-   ladder.ts      L1 interior lights + notify, L2 exterior light, L3 short audio clip (spoken line in progress), L4 sprinkler
+   ladder.ts      L1 interior lights + notify, L2 exterior light, L3 bark clip, L4 sprinkler
    allowlist.ts   every Home Assistant call checked; locks, covers and alarms are never allowed
    actuators.ts   Home Assistant REST, Pi speaker, Telegram (or a dry-run simulator)
    |
@@ -121,8 +121,9 @@ lingering person is one line for the whole incident, with the age at every level
   `test/fixtures/synthetic-night.json` is a hand-built night, labelled synthetic.
   `node scripts/export-fixture.ts` turns a real night from the state directory into a fixture
   outside the repository and prints how the replay differs from the original.
-- **Spoken line.** `src/voice.ts` composes one line from a fixed template and a banned-word
-  filter. Playback is a stub until the Polly and speaker wiring lands.
+- **Spoken line (proposal, not wired).** `src/voice.ts` composes one line from a fixed template
+  and a closed vocabulary. Nothing plays it; the ladder still plays its bark clip. Whether L3
+  speaks is a team decision.
 
 Events that were judged actionable but held back (kill switch, cooldown, old evidence) show as
 `held`, never as silent; a camera Ring encrypts shows as `blind`. The morning report never claims

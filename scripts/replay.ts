@@ -1,4 +1,4 @@
-// Replay a night fixture through the full pipeline and print its ledger (F9).
+// Replay a night fixture through the full pipeline and print its ledger.
 // Usage: node scripts/replay.ts <fixture.json> [--times 3] [--write-expected]
 //   exit 0: every run produced the same ledger and it equals the fixture's expected_ledger
 //   exit 1: a run differed, or the ledger changed since the fixture was written

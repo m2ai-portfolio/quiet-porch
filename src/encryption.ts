@@ -1,4 +1,4 @@
-// Encryption guard (F12). Ring documents `data.attributes.e2e_encryption.enabled` (a boolean) on
+// Encryption guard. Ring documents `data.attributes.e2e_encryption.enabled` (a boolean) on
 // GET /v1/devices/{id}/configurations, and says video requests for an encrypted device still
 // succeed but return content the app cannot read. So an encrypted camera must never be treated
 // as a camera that saw nothing: it is "blind", the ledger says so, and no frame is requested.

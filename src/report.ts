@@ -1,4 +1,4 @@
-// The morning report: the ledger read back in one breath (F3). Pure text from a Ledger, so the
+// The morning report: the ledger read back in one breath. Pure text from a Ledger, so the
 // MCP tool, the simulated Alexa+ page and the tests share one wording. Plain, declarative, no
 // superlatives; in dry run it says so instead of claiming anything was switched.
 import {

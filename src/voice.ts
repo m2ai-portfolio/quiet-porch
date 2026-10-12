@@ -1,12 +1,12 @@
-// The porch speaks (F2, Principle 3): one calm line, composed from a FIXED template and filled
+// The porch speaks: one calm line, composed from a FIXED template and filled
 // with what the camera saw. The model never writes the sentence; it only supplies two short
 // slots (where the person is, what they wear), and every slot and the finished line pass a
 // banned-word filter. A line that fails the filter is replaced by the cached fallback phrase,
 // so the porch never says something we did not approve.
 //
-// Built in Wave 1 behind a STUB for playback: nothing here calls Polly or the Pi speaker, and
+// Built behind a STUB for playback: nothing here calls Polly or the Pi speaker, and
 // the ladder still plays its bark clip. Wiring (replace play_clip, retune LEVEL_DWELL_MS to
-// 0/0/10/20/40 s, synthesize with Polly) waits for Matt per the brief.
+// 0/0/10/20/40 s, synthesize with Polly) is a team decision, not made here.
 
 export const FALLBACK_LINE = "You're on camera. The owner has been notified.";
 
@@ -282,12 +282,12 @@ export function composeLine(
   }
 }
 
-// Playback seam. Wave 2 replaces the stub with Polly synthesis and the Pi speaker.
+// Playback seam. A later change replaces the stub with Polly synthesis and the Pi speaker.
 export interface Speaker {
   speak(text: string): Promise<{ ok: boolean; detail?: string }>;
 }
 
-// STUB (Wave 1, by design): records what would be said and plays nothing.
+// STUB (by design): records what would be said and plays nothing.
 export function createStubSpeaker(log: (text: string) => void = () => {}): Speaker {
   return {
     async speak(text) {

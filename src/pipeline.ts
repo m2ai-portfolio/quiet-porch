@@ -77,7 +77,7 @@ export interface PipelineDeps {
   writeProbe: (r: ProbeRecord) => void;
   writeDecision: (r: DecisionRecord) => void;
   saveFrame: (evidenceId: string, jpeg: Buffer) => void;
-  // True for a camera whose video Ring encrypts (F12): no frame is requested, the ledger says blind.
+  // True for a camera whose video Ring encrypts: no frame is requested, the ledger says blind.
   isBlind?: (deviceId: string) => boolean;
   // Coordinator hook (plan v7 step 3): every decision with its evidence, dry run included.
   onEvaluation?: (ev: Evaluation) => void;

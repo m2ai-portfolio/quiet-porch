@@ -9,7 +9,7 @@ import {
 
 const CLEAN = "You're on camera. The owner has been notified.";
 
-describe('the porch speaks: fixed template, closed vocabulary (F2)', () => {
+describe('the porch speaks: fixed template, closed vocabulary', () => {
   it('fills place and clothing into the template, and nothing else', () => {
     expect(composeLine({ place: 'side gate', clothing: 'dark jacket' }).text).toBe(
       "You're on camera at the side gate. I can see a dark jacket. The owner has been notified.",
@@ -41,7 +41,7 @@ describe('the porch speaks: fixed template, closed vocabulary (F2)', () => {
     for (const p of DEFAULT_PLACES) expect(bannedIn(composeLine({ place: p }).text)).toEqual([]);
   });
 
-  it('refuses everything outside the vocabulary, including what the examiner found', () => {
+  it('refuses everything outside the vocabulary, including what review found', () => {
     const attempts = [
       // hyphen bypasses
       'police-jacket', 'gun-hoodie', 'old-man jacket', 'young-looking hoodie', 'kill-switch hat',

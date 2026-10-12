@@ -156,7 +156,7 @@ export function createApp(cfg: Config) {
   const modeStore = cfg.pipeline
     ? fileModeStore(join(cfg.stateDir, 'mode.json'), cfg.pipeline.config.context.mode)
     : undefined;
-  // F12: which cameras Ring encrypts. Refreshed at startup and on a timer by the entry point.
+  // Which cameras Ring encrypts. Refreshed at startup and on a timer by the entry point.
   const guard = createSourceGuard({
     devices: async () => {
       const out: { accountId: string; deviceId: string }[] = [];
@@ -535,7 +535,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   };
   if (process.env.QUIET_PORCH_PIPELINE !== '0' && existsSync(configPath)) {
     const bedrock = bedrockConfigFromEnv();
-    // One line per model call (request id, tokens, latency) for the friction log (F10).
+    // One line per model call (request id, tokens, latency) for the friction log.
     const modelLog = (rec: object) =>
       appendFileSync(
         join(cfg.stateDir, 'model-calls.jsonl'),

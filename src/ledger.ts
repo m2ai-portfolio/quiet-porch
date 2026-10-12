@@ -1,4 +1,4 @@
-// The night ledger (Principle 1: silence is the product, the ledger proves it). Read-only view
+// The night ledger (silence is the product, the ledger proves it). Read-only view
 // over the tables the pipeline and coordinator already write; it adds no state of its own.
 //   - an event nothing acted on is one "silent" line;
 //   - an incident (an intruder ladder run or a wildlife run) is ONE line, anchored at its first

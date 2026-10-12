@@ -90,7 +90,7 @@ describe('ledger wording', () => {
   });
 });
 
-describe('synthetic night replay (F9)', () => {
+describe('synthetic night replay', () => {
   const fx = loadFixture(fixturePath);
 
   it('is labelled synthetic and says replay on every line', async () => {
@@ -121,7 +121,7 @@ describe('synthetic night replay (F9)', () => {
       [4, 60_000],
     ]);
     expect(gate.stop_reason).toBe('next frame empty');
-    // The Principle 2 proof: no level fired on a frame older than the 15 s limit.
+    // The freshness proof: no level fired on a frame older than the 15 s limit.
     for (const e of gate.levels) expect(e.age_ms!).toBeLessThan(15_000);
     for (const a of gate.actions) expect(a.age_ms!).toBeLessThan(15_000);
   });
@@ -142,7 +142,7 @@ describe('synthetic night replay (F9)', () => {
   });
 });
 
-describe('night report (F3 wording)', () => {
+describe('night report (wording)', () => {
   const fx = loadFixture(fixturePath);
   const opts = { timezone: TZ, start: '20:00', end: '06:30', dryRun: true };
 
@@ -179,7 +179,7 @@ describe('night report (F3 wording)', () => {
     r.db!.close();
   });
 
-  it('a refused step writes no intent, and the report does not claim it (examiner round 2 P1)', async () => {
+  it('a refused step writes no intent, and the report does not claim it (found in review)', async () => {
     const r = await runReplay(fx, { keepDb: true });
     // Simulate the kill switch arriving after L2: the L3 and L4 steps were refused, no rows.
     r.db!.exec(
@@ -260,7 +260,7 @@ describe('night report (F3 wording)', () => {
   });
 });
 
-describe('ledger honesty (examiner round 1)', () => {
+describe('ledger honesty (found in review)', () => {
   const fx = loadFixture(fixturePath);
   const opts = { timezone: TZ, start: '20:00', end: '06:30', dryRun: false };
 
@@ -368,7 +368,7 @@ describe('ledger honesty (examiner round 1)', () => {
   });
 });
 
-describe('fixture validation (examiner round 1)', () => {
+describe('fixture validation (found in review)', () => {
   it('rejects a bad mode, out-of-order events and a non-motion webhook, naming the event', async () => {
     const { mkdtempSync, writeFileSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');

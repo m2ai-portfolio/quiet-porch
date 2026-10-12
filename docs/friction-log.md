@@ -70,7 +70,7 @@ Times: `Z` is UTC, `CDT` is America/Chicago. Dates are 2026.
 - **Request ID:** not captured.
 - **Finding:** `human` (camera 1): 54 of 54 `200` at event +4 s and +9 s. At event +14 s the frame returned is earlier than requested in 12 of 18 `human` and 15 of 16 `motion` events, by up to 4.1 s.
 - **Cost:** stored frames give fresh evidence for the life of one clip only, under the 20 s dwell the ladder needs, so the ladder is capped at L1 on clip evidence.
-- **Workaround:** live view as the freshness source (F1, in progress); Plan B is L1 plus voice on clip evidence with the ledger saying `source clip`.
+- **Workaround:** live view as the freshness source (in progress); Plan B is L1 plus voice on clip evidence with the ledger saying `source clip`.
 - **Reproduce:** `node scripts/probe-readout.ts`.
 
 ### F-06 Webhook delivery lag has a long tail
@@ -117,7 +117,7 @@ Times: `Z` is UTC, `CDT` is America/Chicago. Dates are 2026.
 - **Observed:** 10-06, every image.
 - **Request ID:** not captured.
 - **Finding:** the watermark holds a device ID suffix, "Partner: Quiet Porch" and the generation time.
-- **Cost:** it is in the frames Bedrock sees and in any footage we show. Whether it counts as a third-party mark under the hackathon rules is an open question (project brief, section 9); the brief's plan is to leave it on screen.
+- **Cost:** it is in the frames Bedrock sees and in any footage we show. Whether it counts as a third-party mark under the hackathon rules is an open question; the current plan is to leave it on screen.
 - **Workaround:** none.
 - **Reproduce:** `docs/recon.md`, "Stored image download"; any frame saved to `~/.local/state/quiet-porch/frames/`.
 
@@ -165,7 +165,7 @@ Times: `Z` is UTC, `CDT` is America/Chicago. Dates are 2026.
 ### F-15 Generative voice not yet tried
 
 - **Endpoint:** Polly generative voices (voice ID to be chosen on day one of the voice work).
-- **Finding:** nothing measured. The line composer and banned-word filter (`src/voice.ts`) exist behind a stub; the Polly call and its latency (target under 3 s, cached fallback phrase) are Wave 2.
+- **Finding:** nothing measured. The line composer and banned-word filter (`src/voice.ts`) exist behind a stub; the Polly call and its latency (target under 3 s, cached fallback phrase) are not built yet.
 - **Reproduce:** `npx vitest run test/voice.test.ts` covers the composer only.
 
 ## Product feedback for Amazon

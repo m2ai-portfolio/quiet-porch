@@ -1,4 +1,4 @@
-// Terminal view of the night ledger (F8): the same lines the /ledger page shows, read from a
+// Terminal view of the night ledger: the same lines the /ledger page shows, read from a
 // copy of the live database. Usage: node scripts/ledger.ts [--state-dir dir]
 import { readFileSync } from 'node:fs';
 import { buildLedger, formatLedger } from '../src/ledger.ts';

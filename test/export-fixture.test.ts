@@ -29,7 +29,7 @@ async function exportRoundTrip(withTimings: boolean) {
   return { original, fixture, frames };
 }
 
-describe('export a recorded night into a fixture (F9)', () => {
+describe('export a recorded night into a fixture', () => {
   it('stores the real webhooks, the Ring frame times and the model answers', async () => {
     const { fixture, frames } = await exportRoundTrip(true);
     expect(fixture.events).toHaveLength(synthetic.events.length);

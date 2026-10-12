@@ -171,7 +171,7 @@ describe('pipeline with a blind camera', () => {
   });
 });
 
-describe('source guard stability (examiner round 1)', () => {
+describe('source guard stability (found in review)', () => {
   const body = (enabled: boolean) => ({ data: { attributes: { e2e_encryption: { enabled } } } });
 
   it('a blind camera stays blind through one failed read, and flips only on an explicit readable', async () => {
