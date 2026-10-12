@@ -241,13 +241,20 @@
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       }
+      function banner(src, label) {
+        if (!src || src === 'clip' || src === 'live') return;
+        $('src').textContent = `${src.toUpperCase()}, NOT LIVE${label ? ': ' + label : ''}`;
+        $('src').hidden = false;
+      }
       async function init() {
         if (ready) return;
-        await rpc('initialize', {
+        const init = await rpc('initialize', {
           protocolVersion: '2025-11-25',
           capabilities: {},
           clientInfo: { name: 'quiet-porch-alexa-sim', version: '0.1.0' },
         });
+        const meta = init.result && init.result._meta;
+        if (meta) banner(meta.source, meta.source_label);
         ready = true;
       }
       function add(text, cls, tool) {
@@ -288,11 +295,7 @@
           const text = r.result?.content?.[0]?.text || r.error?.message || 'No answer.';
           // A replayed or sandbox night is labelled on the page, not only in the spoken text.
           const sc = r.result?.structuredContent;
-          if (sc && sc.source && sc.source !== 'clip' && sc.source !== 'live') {
-            $('src').textContent =
-              `${sc.source.toUpperCase()}, NOT LIVE${sc.source_label ? ': ' + sc.source_label : ''}`;
-            $('src').hidden = false;
-          }
+          if (sc) banner(sc.source, sc.source_label);
           add(text, '', `${name}(${JSON.stringify(args)})`);
           speak(text);
         } catch (e) {
@@ -317,6 +320,8 @@
           ask(q);
         }
       };
+      if (token) init().catch(() => {});
+      else add('Paste a token under "Token" to begin.', '');
       document.querySelectorAll('.chip').forEach((c) => (c.onclick = () => ask(c.textContent)));
     </script>
   </body>

@@ -33,4 +33,17 @@ describe('isInside guards the exporter against writing household frames into the
     expect(isInside(repo, join(viaVar, 'hh3'))).toBe(true);
     expect(canonicalPath(join(viaVar, 'hh3'))).toBe(join(repo, 'hh3'));
   });
+
+  it('is not fooled by upper-case spelling on a case-insensitive filesystem (round 2)', () => {
+    const upper = repo.replace(/repo$/, 'REPO');
+    let insensitive = false;
+    try {
+      insensitive = realpathSync(upper) !== undefined;
+    } catch {
+      /* case-sensitive filesystem: nothing to test */
+    }
+    if (!insensitive) return;
+    expect(isInside(repo, join(upper, 'fxupper'))).toBe(true);
+    expect(isInside(upper, join(repo, 'docs'))).toBe(true);
+  });
 });

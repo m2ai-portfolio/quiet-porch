@@ -22,6 +22,8 @@ export interface LedgerAction {
 
 export interface LevelEntry {
   level: number;
+  evidence_id: string | null; // the frame that earned this level
+  done: string[]; // services that really completed on that frame (status "done"), for the report
   age_ms: number | null; // age of the frame that earned this level, when we used it
   dwell_ms: number | null; // Ring capture time of that frame minus the first frame's
 }
@@ -78,6 +80,7 @@ interface EventRow {
   outcome: string | null;
   level_after: number | null;
   o_capture: number | null;
+  o_evidence: string | null;
   applied_at: number | null;
   note: string | null;
 }
@@ -92,6 +95,7 @@ interface IncidentRow {
 
 interface IntentRow {
   incident_id: number;
+  evidence_id: string | null;
   service: string;
   entity_id: string;
   dispatched_at: number;
@@ -197,6 +201,8 @@ function levelEntries(rows: EventRow[]): LevelEntry[] {
     for (let l = top + 1; l <= lvl; l++) {
       out.push({
         level: l,
+        evidence_id: r.o_evidence,
+        done: [],
         age_ms: ageOf(r.applied_at, r.o_capture),
         dwell_ms: first !== null && r.o_capture !== null ? r.o_capture - first : null,
       });
@@ -221,7 +227,7 @@ export function buildLedger(
          d.kind AS kind, d.reason AS reason, d.perception AS perception, d.dry_run AS dry_run,
          d.decided_at AS decided_at, ev.capture_ts AS capture_ts,
          o.incident_id AS incident_id, o.outcome AS outcome, o.level_after AS level_after,
-         o.capture_ts AS o_capture, o.applied_at AS applied_at, o.note AS note
+         o.capture_ts AS o_capture, o.evidence_id AS o_evidence, o.applied_at AS applied_at, o.note AS note
        FROM events e
        LEFT JOIN decisions d ON d.source_event_id = e.source_event_id
        LEFT JOIN evidence ev ON ev.evidence_id = d.evidence_id
@@ -274,13 +280,23 @@ export function buildLedger(
     if (!inc) continue;
     const intents = db
       .prepare(
-        `SELECT i.incident_id, i.service, i.entity_id, i.dispatched_at, i.status, i.data, ev.capture_ts
+        `SELECT i.incident_id, i.evidence_id, i.service, i.entity_id, i.dispatched_at, i.status, i.data, ev.capture_ts
          FROM action_intents i LEFT JOIN evidence ev ON ev.evidence_id = i.evidence_id
          WHERE i.incident_id = ? AND i.cls = 'escalation' ORDER BY i.id`,
       )
       .all(id) as unknown as IntentRow[];
     const first = evs[0];
     const levels = levelEntries(evs);
+    // An output counts as done only if an intent on the frame that earned the level completed.
+    // A refused step (kill switch, stale evidence, audio cap) writes no intent, so it shows here
+    // as a level with nothing done.
+    for (const e of levels) {
+      e.done = intents
+        .filter(
+          (i) => i.status === 'done' && i.evidence_id !== null && i.evidence_id === e.evidence_id,
+        )
+        .map((i) => i.service);
+    }
     const top = levels.at(-1);
     const level = Math.max(0, ...evs.map((r) => r.level_after ?? 0));
     const last = evs.at(-1)!;

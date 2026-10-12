@@ -32,7 +32,11 @@ function atSeconds(ms: number | null): string {
   return ms === null ? '' : ` at ${Math.round(ms / 1000)} seconds`;
 }
 
-// What the porch did, from the levels earned and the actions logged.
+// The service that must have completed for each level to count as done.
+const LEVEL_SERVICE: Record<number, string> = { 2: 'turn_on', 3: 'play_clip', 4: 'open_valve' };
+
+// What the porch did, level by level, claiming only what a completed action backs up. Level 1
+// (the phone alert) leaves no intent row, so it is stated as the level reached, nothing more.
 function didClauses(l: LedgerLine): string[] {
   if (l.profile === 'wildlife') {
     const ran = l.actions.some((a) => a.service === 'open_valve' && a.status === 'done');
@@ -40,11 +44,18 @@ function didClauses(l: LedgerLine): string[] {
   }
   const out: string[] = [];
   for (const e of l.levels) {
-    if (e.level === 1) out.push('alerted you at once');
-    if (e.level === 2) out.push(`switched on the outside light${atSeconds(e.dwell_ms)}`);
+    if (e.level === 1) continue;
+    const at = atSeconds(e.dwell_ms);
+    const ok = e.done.includes(LEVEL_SERVICE[e.level]);
+    if (e.level === 2)
+      out.push(
+        ok ? `switched on the outside light${at}` : `could not switch on the outside light${at}`,
+      );
     if (e.level === 3)
-      out.push(`${l.spoken_text ? 'spoke' : 'played a sound'}${atSeconds(e.dwell_ms)}`);
-    if (e.level === 4) out.push(`ran the sprinkler${atSeconds(e.dwell_ms)}`);
+      out.push(
+        ok ? `${l.spoken_text ? 'spoke' : 'played a sound'}${at}` : `could not play a sound${at}`,
+      );
+    if (e.level === 4) out.push(ok ? `ran the sprinkler${at}` : `could not run the sprinkler${at}`);
   }
   return out;
 }
@@ -74,10 +85,12 @@ export function handledSentence(l: LedgerLine, tz: string): string {
   }
   // Never claim an output that did not go through: say what was reached and that actions failed.
   if (!allActionsDone(l)) {
-    return `${subject(l.what)} ${where}. It reached level ${l.level}, but some actions did not complete. ${endClause(l, tz)}.`;
+    const reached = l.profile === 'wildlife' ? 'tried a wildlife run' : `reached level ${l.level}`;
+    return `${subject(l.what)} ${where}. It ${reached}, but some actions did not complete. ${endClause(l, tz)}.`;
   }
   const did = didClauses(l);
-  const middle = did.length ? ` It ${joinClauses(did)}.` : '';
+  const first = l.levels.length ? 'It reached level ' + l.level + '.' : '';
+  const middle = did.length ? ` It ${joinClauses(did)}.` : first ? ` ${first}` : '';
   return `${subject(l.what)} ${where}.${middle} ${endClause(l, tz)}.`;
 }
 
@@ -98,18 +111,14 @@ export function nightReport(
     dryRun: boolean;
     isExterior?: (entityId: string) => boolean;
     source?: LedgerSource;
-    sourceLabel?: string;
   },
 ): NightReport {
   const { counts, lines } = ledger;
   const handled = lines.filter((l) => l.kind === 'handled');
-  // A replay or sandbox night is never "tonight": it says what it is before it says anything.
-  const prefix =
-    opts.source && opts.source !== 'clip' && opts.source !== 'live'
-      ? `${opts.source === 'replay' ? 'Replay' : 'Sandbox'}, not live${opts.sourceLabel ? `: ${opts.sourceLabel}` : ''}. `
-      : span.inProgress
-        ? 'So far tonight. '
-        : '';
+  // A replay or sandbox night is never "tonight". Its label is added once, by the MCP layer that
+  // serves every answer, so the wording here only avoids the live-sounding phrase.
+  const nonLive = opts.source !== undefined && opts.source !== 'clip' && opts.source !== 'live';
+  const prefix = span.inProgress && !nonLive ? 'So far tonight. ' : '';
   const parts: string[] = [];
   if (counts.events === 0) {
     parts.push(

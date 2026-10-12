@@ -123,6 +123,19 @@ function ago(ms: number): string {
   return `${Math.round(s / 3600)} hours ago`;
 }
 
+// A replayed or sandbox night is labelled on EVERY answer, refusals and errors included, by the
+// one place all tool results pass through. Live and clip-backed answers are left as they are.
+function labelling(deps: StatusDeps): { prefix: string; extra: object } | undefined {
+  const src = deps.source;
+  if (!src || src === 'clip' || src === 'live') return undefined;
+  const name = src === 'replay' ? 'Replay' : 'Sandbox';
+  const label = deps.sourceLabel ? `: ${deps.sourceLabel}` : '';
+  return {
+    prefix: `${name}, not live${label}. `,
+    extra: { source: src, source_label: deps.sourceLabel ?? null },
+  };
+}
+
 // Goes into the ledger and the logs: short, one line, printable.
 export function cleanLabel(raw: unknown): string {
   const t = String(raw ?? '')
@@ -176,9 +189,6 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
           t: number | null;
         };
         const parts: string[] = [];
-        if (deps.source && deps.source !== 'clip' && deps.source !== 'live') {
-          parts.push(`${deps.source === 'replay' ? 'Replay' : 'Sandbox'}, not live.`);
-        }
         if (!inc) parts.push('All quiet. No active incident.');
         else if (inc.profile === 'wildlife') {
           parts.push(`A wildlife run is in progress in the ${inc.zone.replace(/_/g, ' ')}.`);
@@ -330,7 +340,6 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
           dryRun: deps.dryRun,
           isExterior: deps.isExterior,
           source: deps.source,
-          sourceLabel: deps.sourceLabel,
         });
         return {
           text: report.text,
@@ -401,6 +410,9 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
         const stray = Object.keys(args).find((k) => !known.has(k));
         if (stray) return { text: `I do not know the argument ${stray}.`, isError: true };
         if (args.cancel === true) {
+          if (args.minutes !== undefined || args.person_label !== undefined) {
+            return { text: 'Cancel takes no other argument.', isError: true };
+          }
           const n = deps.cancelExpectation('mcp:owner');
           return {
             text: n ? 'Okay. I will watch for visitors again.' : 'There was no window to cancel.',
@@ -486,6 +498,7 @@ export function createStatusMcp(deps: StatusDeps) {
             protocolVersion: PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0],
             capabilities: { tools: { listChanged: false } },
             serverInfo: { name: 'quiet-porch-status', title: 'Quiet Porch', version: '0.1.0' },
+            ...(labelling(deps) ? { _meta: labelling(deps)!.extra } : {}),
             instructions:
               'Home deterrent status for one house. Use get_incident_status for "is everything okay" and get_night_report for "what happened last night". stand_down, set_mode and expect_me need the owner token.',
           },
@@ -510,22 +523,27 @@ export function createStatusMcp(deps: StatusDeps) {
       case 'tools/call': {
         const tool = byName.get(String(params.name));
         if (!tool) return rpcError(id, -32602, `Unknown tool: ${String(params.name)}`);
+        const mark = labelling(deps);
+        const said = (text: string) => (mark ? mark.prefix + text : text);
         if (tool.role === 'owner' && role !== 'owner') {
           deps.log(`mcp: ${tool.name} refused for a read token`);
           return {
             jsonrpc: '2.0',
             id,
             result: {
-              content: [{ type: 'text', text: 'That needs the owner. I can only report status.' }],
+              content: [
+                { type: 'text', text: said('That needs the owner. I can only report status.') },
+              ],
+              ...(mark ? { structuredContent: mark.extra } : {}),
               isError: true,
             },
           };
         }
+        // Omitted and null both mean "no arguments" (some MCP clients send null).
         if (
           params.arguments !== undefined &&
-          (typeof params.arguments !== 'object' ||
-            params.arguments === null ||
-            Array.isArray(params.arguments))
+          params.arguments !== null &&
+          (typeof params.arguments !== 'object' || Array.isArray(params.arguments))
         ) {
           return rpcError(id, -32602, 'arguments must be an object');
         }
@@ -537,8 +555,10 @@ export function createStatusMcp(deps: StatusDeps) {
             jsonrpc: '2.0',
             id,
             result: {
-              content: [{ type: 'text', text: r.text }],
-              ...(r.data ? { structuredContent: r.data } : {}),
+              content: [{ type: 'text', text: said(r.text) }],
+              ...(r.data || mark
+                ? { structuredContent: { ...(r.data ?? {}), ...(mark?.extra ?? {}) } }
+                : {}),
               ...(r.isError ? { isError: true } : {}),
             },
           };
@@ -547,7 +567,11 @@ export function createStatusMcp(deps: StatusDeps) {
           return {
             jsonrpc: '2.0',
             id,
-            result: { content: [{ type: 'text', text: 'Something went wrong.' }], isError: true },
+            result: {
+              content: [{ type: 'text', text: said('Something went wrong.') }],
+              ...(mark ? { structuredContent: mark.extra } : {}),
+              isError: true,
+            },
           };
         }
       }

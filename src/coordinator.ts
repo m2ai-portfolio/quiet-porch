@@ -20,6 +20,7 @@ import {
   convertPendingIntents,
   createExpectation,
   EXPECT_DEFAULT_MINUTES,
+  EXPECT_GRACE_MS,
   openIncident,
   openReconcile,
   openReconcileEntities,
@@ -418,9 +419,11 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
   }
 
   // The owner said the person is expected: the intruder ladder stays at L0 for this event.
-  function expectedWindow(ev: Evaluation): Expectation | undefined {
+  // `graceMs` lets a frame captured just before the owner spoke count. It is 0 when a ladder is
+  // already running: a frame taken before the window must not end a run that began before it.
+  function expectedWindow(ev: Evaluation, graceMs = EXPECT_GRACE_MS): Expectation | undefined {
     return ev.kind === 'intruder'
-      ? activeExpectation(db, clock.now(), ev.captureTs ?? clock.now())
+      ? activeExpectation(db, clock.now(), ev.captureTs ?? clock.now(), graceMs)
       : undefined;
   }
 
@@ -638,9 +641,9 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
               note: exp.person_label,
             });
             log({ event: 'expected_ends_wildlife', incident_id: inc.id, person: exp.person_label });
-            return endIncident(inc.id, 'cancelled', `expected:${exp.person_label}`, {
-              cooldown: false,
-            });
+            // The wildlife cooldown stays: a second wildlife frame must not re-open the
+            // sprinkler on a yard that holds an expected person.
+            return endIncident(inc.id, 'cancelled', `expected:${exp.person_label}`);
           }
           return preempt(inc, ev);
         }
@@ -648,7 +651,7 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
         return;
       }
       if (ev.kind === 'wildlife') log({ event: 'wildlife_during_intruder', incident_id: inc.id });
-      const exp = expectedWindow(ev);
+      const exp = expectedWindow(ev, 0); // no pre-window grace for a run already under way
       if (exp) {
         outcome(ev, {
           kind: 'expected',

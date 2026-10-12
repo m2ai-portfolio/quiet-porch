@@ -118,12 +118,14 @@ const BANNED_PHRASES = [
 // thought of ("pistol", "blind", a hyphenated "police-jacket"); a closed list can only ever say
 // what was approved. The banned-word list above stays as a second check on the finished line.
 const COLOURS = new Set([
-  'black', 'white', 'gray', 'grey', 'red', 'blue', 'green', 'brown', 'tan', 'beige', 'navy',
+  'black', 'white', 'gray', 'grey', 'red', 'blue', 'green', 'brown', 'beige', 'navy',
   'orange', 'yellow', 'purple', 'pink', 'dark', 'light', 'bright', 'striped', 'plaid',
 ]); // prettier-ignore
+// Only neutral garments. Left out on purpose: dress, skirt and top (imply a gender), hood (reads
+// as hate imagery with "white"), bag and backpack (read as loot), tan (a skin-tone word).
 const GARMENTS = new Set([
-  'jacket', 'coat', 'hoodie', 'sweatshirt', 'sweater', 'shirt', 'tee', 't-shirt', 'top', 'vest',
-  'dress', 'skirt', 'hat', 'cap', 'beanie', 'hood', 'scarf', 'backpack', 'bag',
+  'jacket', 'coat', 'hoodie', 'sweatshirt', 'sweater', 'shirt', 'tee', 't-shirt', 'vest', 'hat',
+  'cap', 'beanie', 'scarf',
 ]); // prettier-ignore
 // Plural garments take no article: "I can see gray shorts".
 const PLURAL_GARMENTS = new Set([
@@ -171,8 +173,8 @@ interface Item {
 
 // "dark jacket", "gray shorts", "hat", or two of them joined with " and ". Anything else is
 // refused whole: no partial credit, no hyphens, no digits, no extra words.
-function parseClothing(raw: string | undefined): Item[] | undefined {
-  if (!raw) return undefined;
+function parseClothing(raw: unknown): Item[] | undefined {
+  if (typeof raw !== 'string' || !raw) return undefined;
   const t = raw.trim().toLowerCase();
   if (!/^[a-z]+(?:-[a-z]+)?(?: [a-z]+(?:-[a-z]+)?)*$/.test(t) || t.length > 40) return undefined;
   const parts = t.split(' and ');
@@ -198,8 +200,21 @@ function phraseOf(i: Item): string {
   return i.colour ? `${i.colour} ${i.garment}` : i.garment;
 }
 
-function parsePlace(raw: string | undefined, places: string[]): string | undefined {
-  if (!raw) return undefined;
+// Words a place may be made of. A caller's own list (zone labels from config) is held to the
+// same vocabulary, so a bad config line can never be spoken.
+const PLACE_WORDS = new Set([
+  'side', 'front', 'back', 'gate', 'steps', 'door', 'yard', 'driveway', 'porch', 'walkway',
+  'garage', 'fence', 'patio', 'deck', 'garden', 'path', 'entrance',
+]); // prettier-ignore
+
+function approvedPlaces(places: string[]): string[] {
+  return places.filter(
+    (p) => typeof p === 'string' && p.length > 0 && p.split(' ').every((w) => PLACE_WORDS.has(w)),
+  );
+}
+
+function parsePlace(raw: unknown, places: string[]): string | undefined {
+  if (typeof raw !== 'string' || !raw) return undefined;
   const t = raw.trim().toLowerCase().replace(/^the /, '');
   return places.includes(t) ? t : undefined;
 }
@@ -231,9 +246,14 @@ export interface ComposedLine {
 
 // The template. "You're on camera at <place>." plus, when a clothing slot survived,
 // " I can see <clothing>." and always the closing fact. Nothing else is ever said.
-export function composeLine(slots: LineSlots, opts: { places?: string[] } = {}): ComposedLine {
+export function composeLine(
+  rawSlots: LineSlots | null | undefined,
+  opts: { places?: string[] } = {},
+): ComposedLine {
+  // Slots come from model JSON: anything that is not an object of strings is simply empty.
+  const slots: LineSlots = rawSlots && typeof rawSlots === 'object' ? rawSlots : {};
   const dropped: string[] = [];
-  const place = parsePlace(slots.place, opts.places ?? DEFAULT_PLACES);
+  const place = parsePlace(slots.place, approvedPlaces(opts.places ?? DEFAULT_PLACES));
   if (slots.place && !place) dropped.push('place');
   const items = parseClothing(slots.clothing);
   if (slots.clothing && !items) dropped.push('clothing');

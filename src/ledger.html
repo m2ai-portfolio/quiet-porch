@@ -187,7 +187,10 @@
           $('window').textContent =
             `${stamp(d.window.from, d.timezone)} to ${stamp(d.window.to, d.timezone)} (${d.timezone})` +
             (d.window.in_progress && d.source !== 'replay' ? ' · night in progress' : '');
-          if (d.source !== 'clip') label(d.source_label || d.source.toUpperCase());
+          if (d.source !== 'clip') {
+            label(d.source.toUpperCase() + ', NOT LIVE');
+            if (d.source_label) label(d.source_label);
+          }
           if (d.dry_run) label('DRY RUN');
           if (!d.text_lines.length) {
             const p = document.createElement('pre');

@@ -483,12 +483,13 @@ export function activeExpectation(
   db: DatabaseSync,
   now = Date.now(),
   at = now,
+  graceMs = EXPECT_GRACE_MS,
 ): Expectation | undefined {
   return db
     .prepare(
       'SELECT id, person_label, created_at, expires_at FROM expectations WHERE created_at - ? <= ? AND expires_at > ? AND expires_at > ? ORDER BY id DESC LIMIT 1',
     )
-    .get(EXPECT_GRACE_MS, at, at, now) as Expectation | undefined;
+    .get(graceMs, at, at, now) as Expectation | undefined;
 }
 
 // Ends every open window now; returns how many were open.

@@ -121,6 +121,7 @@ describe('expect_me, "I\'m stepping out"', () => {
     await s.coord.idle();
     expect(activeIncident(s.db)).toBeDefined();
     s.coord.expectMe('Lutfiya', 10, 'mcp:owner');
+    await s.clock.advance(2000); // the next frame is captured after the owner spoke
     await s.coord.onEvaluation(s.person());
     await s.coord.idle();
     expect(activeIncident(s.db)).toBeUndefined();
@@ -185,6 +186,7 @@ describe('expect_me corner cases the examiner found', () => {
     await s.coord.onEvaluation(s.person());
     await s.coord.idle();
     s.coord.expectMe('A', 1, 'mcp:owner');
+    await s.clock.advance(2000);
     await s.coord.onEvaluation(s.person()); // ends the running incident as expected
     await s.coord.idle();
     expect(activeIncident(s.db)).toBeUndefined();
@@ -228,5 +230,32 @@ describe('expect_me corner cases the examiner found', () => {
     s.coord.expectMe('A', 60, 'mcp:owner');
     s.coord.expectMe('B', 1, 'mcp:owner');
     expect(s.coord.cancelExpectation('mcp:owner')).toBe(2); // one call ends them all
+  });
+
+  it('after an expected end of a wildlife run, a second wildlife frame does not re-open the sprinkler (round 2)', async () => {
+    const s = setup();
+    await s.coord.onEvaluation(wildlife(s));
+    await s.coord.idle();
+    s.coord.expectMe('Lutfiya', 10, 'mcp:owner');
+    await s.coord.onEvaluation(s.person());
+    await s.coord.idle();
+    await s.clock.advance(2000);
+    await s.coord.onEvaluation({ ...wildlife(s), sourceEventId: 'w2', evidenceId: 'evw2' });
+    await s.coord.idle();
+    expect(activeIncident(s.db)).toBeUndefined();
+    expect(s.outcomes().at(-1)).toMatchObject({ outcome: 'not_opened', note: 'wildlife_cooldown' });
+  });
+
+  it('the pre-window grace never ends a ladder that was already running (round 2)', async () => {
+    const s = setup();
+    await s.coord.onEvaluation(s.person()); // the ladder opens at L1
+    await s.coord.idle();
+    await s.clock.advance(5000);
+    s.coord.expectMe('Lutfiya', 10, 'mcp:owner');
+    // a frame captured 4 s BEFORE the window opened: inside the 10 s grace, but a ladder runs
+    await s.coord.onEvaluation({ ...s.person(), captureTs: s.clock.now() - 4000 });
+    await s.coord.idle();
+    expect(activeIncident(s.db)).toBeDefined();
+    expect(s.outcomes().at(-1)).toMatchObject({ outcome: 'incident' });
   });
 });

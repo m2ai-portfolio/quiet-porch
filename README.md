@@ -65,6 +65,29 @@ in the repo.
 
 The simulated Alexa+ client is `src/alexa-sim.html`, served by status-mcp at `/alexa`.
 
+## How this meets the four judging criteria
+
+What exists today is stated as such, and what does not exist yet is listed after each point.
+
+- **Technological Implementation.** Signed Ring webhooks, `at_timestamp` image download, device
+  configuration (`e2e_encryption`), Amazon Bedrock Converse for perception and critique, and an
+  MCP server (specification 2025-11-25, Streamable HTTP) for Alexa+. Every ledger time is a Ring
+  timestamp and every level carries the age of the frame that earned it
+  (`src/ledger.ts`, `src/frames.ts`, `src/mcp.ts`). A recorded night replays through the real
+  pipeline three times with the same ledger (`src/replay.ts`). Measured behaviour and friction:
+  [`docs/recon.md`](docs/recon.md), [`docs/friction-log.md`](docs/friction-log.md).
+  _Not yet:_ Ring live view as the freshness source; the service runs in dry run.
+- **Design.** Silent by default; one alert with a Stop link; one ledger line per night event with
+  the reason it stopped; a morning report in one breath that never claims an output that did not
+  go through (`src/report.ts`); replay and dry run labelled on every page and answer.
+- **Potential Impact.** False alarms are the reason people switch motion alerts off. The ledger
+  works on any Ring home through the private-app connection, tracks no one across accounts and
+  uses no faces. _Not yet:_ a second connected household shown next to the first.
+- **Quality of the Idea.** A deterrent judged by its silence: deterministic code escalates only on
+  fresh evidence and the model never acts. The line the porch speaks comes from a fixed template
+  and a closed vocabulary (`src/voice.ts`). _Not yet:_ spoken playback (the composer exists behind a
+  stub).
+
 ## The night ledger
 
 Silence is the product, and the ledger proves it. Every motion event of the armed night is one

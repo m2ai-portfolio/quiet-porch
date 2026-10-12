@@ -12,7 +12,7 @@
 // original ledger instead of hiding them.
 import { readFileSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, sep } from 'node:path';
 import { createDryRunActuators } from './actuators.ts';
 import { parseAllowlist } from './allowlist.ts';
 import type { ContentBlock } from './bedrock.ts';
@@ -76,6 +76,10 @@ export function loadFixture(path: string): Fixture {
     throw new Error(`${path}: mode must be home, away or night, got "${String(fx.mode)}"`);
   }
   fx.events.forEach((e, i) => {
+    if (!e || typeof e !== 'object') throw new Error(`${path}: event ${i} is not an object`);
+    if (!Array.isArray(e.frames)) throw new Error(`${path}: event ${i} has no frames array`);
+    if (!e.model || typeof e.model !== 'object')
+      throw new Error(`${path}: event ${i} has no model`);
     if (!Number.isFinite(e.received_at)) throw new Error(`${path}: event ${i} has no received_at`);
     if (i > 0 && e.received_at < fx.events[i - 1].received_at) {
       throw new Error(
@@ -89,7 +93,14 @@ export function loadFixture(path: string): Fixture {
   const dir = dirname(resolve(path));
   for (const e of fx.events) {
     for (const f of e.frames) {
-      if (f.file && !f.base64) f.base64 = readFileSync(resolve(dir, f.file)).toString('base64');
+      if (f.file && !f.base64) {
+        const full = resolve(dir, f.file);
+        // A fixture is data: its frame files must live inside its own folder.
+        if (full !== dir && !full.startsWith(dir + sep)) {
+          throw new Error(`${path}: frame file ${f.file} is outside the fixture folder`);
+        }
+        f.base64 = readFileSync(full).toString('base64');
+      }
     }
   }
   return fx;

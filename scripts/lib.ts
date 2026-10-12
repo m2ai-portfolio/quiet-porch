@@ -39,7 +39,8 @@ export function canonicalPath(path: string): string {
     tail.unshift(head.slice(dirname(head).length + 1));
     head = dirname(head);
   }
-  return join(realpathSync(head), ...tail);
+  // .native returns the on-disk spelling, so REPO and repo are the same directory on macOS.
+  return join(realpathSync.native(head), ...tail);
 }
 
 // True when `child` is `parent` or anywhere below it, after resolving real paths. A name that

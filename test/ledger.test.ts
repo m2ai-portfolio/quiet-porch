@@ -159,25 +159,60 @@ describe('night report (F3 wording)', () => {
     expect(r.counts.handled).toBe(2);
   });
 
-  it('live wording reads the ladder back, with Ring-time dwell, and ends calmly', async () => {
-    const { ledger, endedAt } = await runReplay(fx);
-    const live = {
-      ...ledger,
-      lines: ledger.lines.map((l) => ({ ...l, dry_run: false })),
-    };
-    const span = latestNightWindow(endedAt, '20:00', '06:30', TZ);
+  it('live wording reads the ladder back, with Ring-time dwell, only for outputs that completed', async () => {
+    const r = await runReplay(fx, { keepDb: true });
+    r.db!.exec("UPDATE action_intents SET status = 'done'; UPDATE decisions SET dry_run = 0");
+    const span = latestNightWindow(r.endedAt, '20:00', '06:30', TZ);
+    const live = buildLedger(r.db!, span);
     const gate = live.lines.find((l) => l.profile === 'intruder')!;
     expect(handledSentence(gate, TZ)).toBe(
-      'a person in the front yard at 11:02. It alerted you at once, switched on the outside light at 20 seconds, ' +
+      'a person in the front yard at 11:02. It switched on the outside light at 20 seconds, ' +
         'played a sound at 40 seconds and ran the sprinkler at 60 seconds. The person was gone by 11:03.',
     );
-    const r = nightReport(live, span, {
+    const text = nightReport(live, span, {
       ...opts,
       dryRun: false,
       isExterior: (id) => id.startsWith('valve.') || id.startsWith('switch.'),
-    });
-    expect(r.text).not.toContain('Nothing was switched outside.'); // the light and valve did switch
-    expect(r.text).not.toContain('dry run');
+    }).text;
+    expect(text).not.toContain('Nothing was switched outside.'); // the light and valve did switch
+    expect(text).not.toContain('dry run');
+    r.db!.close();
+  });
+
+  it('a refused step writes no intent, and the report does not claim it (examiner round 2 P1)', async () => {
+    const r = await runReplay(fx, { keepDb: true });
+    // Simulate the kill switch arriving after L2: the L3 and L4 steps were refused, no rows.
+    r.db!.exec(
+      "UPDATE action_intents SET status = 'done'; UPDATE decisions SET dry_run = 0; " +
+        "DELETE FROM action_intents WHERE service IN ('play_clip', 'open_valve', 'set_value') " +
+        "AND incident_id = (SELECT id FROM incidents WHERE profile = 'intruder')",
+    );
+    const span = latestNightWindow(r.endedAt, '20:00', '06:30', TZ);
+    const ledger = buildLedger(r.db!, span);
+    const gate = ledger.lines.find((l) => l.profile === 'intruder')!;
+    expect(gate.level).toBe(4);
+    expect(handledSentence(gate, TZ)).toBe(
+      'a person in the front yard at 11:02. It switched on the outside light at 20 seconds, ' +
+        'could not play a sound at 40 seconds and could not run the sprinkler at 60 seconds. ' +
+        'The person was gone by 11:03.',
+    );
+    const text = nightReport(ledger, span, { ...opts, dryRun: false }).text;
+    expect(text).not.toContain('played a sound');
+    expect(text).not.toContain('ran the sprinkler at 60');
+    r.db!.close();
+  });
+
+  it('an incident that reached L4 with no completed action at all claims nothing', async () => {
+    const r = await runReplay(fx, { keepDb: true });
+    r.db!.exec(
+      "UPDATE decisions SET dry_run = 0; DELETE FROM action_intents WHERE incident_id = (SELECT id FROM incidents WHERE profile = 'intruder')",
+    );
+    const span = latestNightWindow(r.endedAt, '20:00', '06:30', TZ);
+    const gate = buildLedger(r.db!, span).lines.find((l) => l.profile === 'intruder')!;
+    const sentence = handledSentence(gate, TZ);
+    expect(sentence).not.toMatch(/switched on|played a sound|ran the sprinkler/);
+    expect(sentence).toContain('could not switch on the outside light');
+    r.db!.close();
   });
 
   it('an empty night says silent all night with the window times', () => {
@@ -229,18 +264,11 @@ describe('ledger honesty (examiner round 1)', () => {
   const fx = loadFixture(fixturePath);
   const opts = { timezone: TZ, start: '20:00', end: '06:30', dryRun: false };
 
-  it('a replay says it is a replay before it says anything, and is never "tonight"', async () => {
+  it('a replay report is never "tonight" (the MCP layer adds the replay label)', async () => {
     const { ledger, endedAt } = await runReplay(fx);
     const span = latestNightWindow(endedAt, '20:00', '06:30', TZ);
-    const r = nightReport(ledger, span, {
-      ...opts,
-      dryRun: true,
-      source: 'replay',
-      sourceLabel: fx.label,
-    });
-    expect(
-      r.text.startsWith('Replay, not live: synthetic fixture, not a real night. Five events.'),
-    ).toBe(true);
+    const r = nightReport(ledger, span, { ...opts, dryRun: true, source: 'replay' });
+    expect(r.text.startsWith('Five events.')).toBe(true);
     expect(r.text).not.toContain('tonight');
   });
 
@@ -251,6 +279,8 @@ describe('ledger honesty (examiner round 1)', () => {
     const ledger = buildLedger(r.db!, span);
     const text = nightReport(ledger, span, opts).text;
     expect(text).toContain('It reached level 4, but some actions did not complete.');
+    expect(text).toContain('tried a wildlife run, but some actions did not complete');
+    expect(text).not.toContain('reached level 0');
     expect(text).not.toContain('ran the sprinkler');
     expect(text).not.toContain('switched on the outside light');
     // the armadillo run opened a valve that failed too
@@ -355,5 +385,16 @@ describe('fixture validation (examiner round 1)', () => {
     expect(() => loadFixture(write(swapped))).toThrow('event 1 is earlier than event 0');
     const bad = { ...fx, events: [{ ...fx.events[0], webhook: { data: { type: 'button' } } }] };
     expect(() => loadFixture(write(bad))).toThrow('event 0 is not a motion_detected webhook');
+    const nul = { ...fx, events: [fx.events[0], null] };
+    expect(() => loadFixture(write(nul))).toThrow('event 1 is not an object');
+    const noFrames = { ...fx, events: [{ ...fx.events[0], frames: undefined }] };
+    expect(() => loadFixture(write(noFrames))).toThrow('event 0 has no frames array');
+    const noModel = { ...fx, events: [{ ...fx.events[0], model: undefined }] };
+    expect(() => loadFixture(write(noModel))).toThrow('event 0 has no model');
+    const outside = {
+      ...fx,
+      events: [{ ...fx.events[0], frames: [{ ts_ring: 1, file: '../../etc/hosts' }] }],
+    };
+    expect(() => loadFixture(write(outside))).toThrow('outside the fixture folder');
   });
 });

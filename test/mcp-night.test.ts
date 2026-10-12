@@ -5,6 +5,7 @@ import { cleanLabel, createStatusMcp, createStatusTools, type ModeStore } from '
 import { loadFixture, runReplay } from '../src/replay.ts';
 
 const tokens = { read: 'read-token-0123456789', owner: 'owner-token-0123456789' };
+const LABEL = 'Replay, not live: synthetic fixture, not a real night. ';
 const fixture = loadFixture(new URL('./fixtures/synthetic-night.json', import.meta.url).pathname);
 
 describe('night tools over Streamable HTTP (F3, F4, F8)', () => {
@@ -99,7 +100,7 @@ describe('night tools over Streamable HTTP (F3, F4, F8)', () => {
     const ok = await call('expect_me', { person_label: 'Lutfiya', minutes: 15 }, tokens.owner);
     expect(expectMe).toHaveBeenCalledWith('Lutfiya', 15, 'mcp:owner');
     expect(ok.content[0].text).toBe(
-      'Okay. I will stay quiet about Lutfiya for 15 minutes, and note each time.',
+      `${LABEL}Okay. I will stay quiet about Lutfiya for 15 minutes, and note each time.`,
     );
   });
 
@@ -111,6 +112,20 @@ describe('night tools over Streamable HTTP (F3, F4, F8)', () => {
     expect(expectMe).toHaveBeenCalledWith('Mattscriptxscript', undefined, 'mcp:owner');
     expect(cleanLabel('')).toBe('someone expected');
     expect(cleanLabel('a'.repeat(100))).toHaveLength(40);
+  });
+
+  it('arguments null is the same as none', async () => {
+    const res = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokens.read}` },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 8,
+        method: 'tools/call',
+        params: { name: 'get_incident_status', arguments: null },
+      }),
+    });
+    expect((await res.json()).result.isError).toBeUndefined();
   });
 
   it('expect_me refuses typos, wrong types and non-object arguments, and can be cancelled', async () => {
@@ -143,9 +158,56 @@ describe('night tools over Streamable HTTP (F3, F4, F8)', () => {
     expect((await res.json()).error.code).toBe(-32602);
     const c = await call('expect_me', { cancel: true }, tokens.owner);
     expect(cancelExpectation).toHaveBeenCalledWith('mcp:owner');
-    expect(c.content[0].text).toBe('Okay. I will watch for visitors again.');
+    expect(c.content[0].text).toBe(`${LABEL}Okay. I will watch for visitors again.`);
     const denied = await call('expect_me', { cancel: true });
     expect(denied.isError).toBe(true);
+  });
+
+  it('EVERY answer from a replay server is labelled: each tool, refusals, errors and initialize', async () => {
+    for (const name of [
+      'get_incident_status',
+      'list_recent_incidents',
+      'get_ledger',
+      'get_night_report',
+    ]) {
+      const r = await call(name);
+      expect(r.content[0].text.startsWith(LABEL), name).toBe(true);
+      expect(r.structuredContent).toMatchObject({ source: 'replay', source_label: fixture.label });
+    }
+    const refused = await call('stand_down'); // read token on an owner tool
+    expect(refused.content[0].text.startsWith(LABEL)).toBe(true);
+    expect(refused.isError).toBe(true);
+    const bad = await call('expect_me', { minutes: 1000 }, tokens.owner);
+    expect(bad.content[0].text.startsWith(LABEL)).toBe(true);
+    const init = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tokens.read}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'initialize', params: {} }),
+    });
+    expect((await init.json()).result._meta).toEqual({
+      source: 'replay',
+      source_label: fixture.label,
+    });
+  });
+
+  it('a live (clip) server leaves answers unlabelled', async () => {
+    const db = openDb(':memory:');
+    const tools = createStatusTools({
+      db,
+      tokens,
+      mode: { get: () => 'home', set: () => {} },
+      killed: () => false,
+      dryRun: false,
+      standDown: async () => 'not_active',
+      clearReconcile: () => false,
+      expectMe: vi.fn(),
+      cancelExpectation: () => 0,
+      allowedOrigins: [],
+      log: () => {},
+    });
+    const r = await tools.find((t) => t.name === 'list_recent_incidents')!.run({});
+    expect(r.text).toBe('No incidents yet.');
+    db.close();
   });
 
   it('serves the ledger page without auth and without a token inside it', async () => {

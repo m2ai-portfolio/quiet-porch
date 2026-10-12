@@ -128,4 +128,57 @@ describe('the porch speaks: fixed template, closed vocabulary (F2)', () => {
     expect(r).toEqual({ ok: true, detail: 'stub: nothing was played' });
     expect(log).toHaveBeenCalledWith('hello');
   });
+
+  it('words that imply a gender, read as hate imagery or loot are not in the vocabulary (round 2)', () => {
+    for (const bad of [
+      'dark hood',
+      'white hood',
+      'black hood',
+      'plaid hood',
+      'tan dress',
+      'pink skirt',
+      'red top',
+      'dark bag',
+      'striped bag',
+      'light hood and dark bag',
+      'tan jacket',
+      'dark backpack',
+    ]) {
+      expect(composeLine({ clothing: bad }).text, bad).toBe(CLEAN);
+    }
+    expect(composeLine({ clothing: 'dark hoodie' }).text).toContain('a dark hoodie');
+  });
+
+  it('a caller-supplied places list is held to the approved place words (round 2)', () => {
+    for (const bad of [
+      'gate. you will regret this',
+      'nursery',
+      'bedroom window',
+      'kid room',
+      'alley behind the dumpster, watching you',
+    ]) {
+      const l = composeLine({ place: bad }, { places: [bad] });
+      expect(l.text, bad).toBe(CLEAN);
+      expect(l.dropped).toEqual(['place']);
+    }
+    expect(
+      composeLine({ place: 'side yard' }, { places: ['side yard', 'nursery'] }).text,
+    ).toContain('at the side yard');
+  });
+
+  it('slots from model JSON that are not strings never crash the escalation (round 2)', () => {
+    for (const slots of [
+      { place: 5 },
+      { clothing: ['a'] },
+      { clothing: {} },
+      { place: null, clothing: null },
+      null,
+      undefined,
+      'x',
+      7,
+    ]) {
+      expect(() => composeLine(slots as never)).not.toThrow();
+      expect(composeLine(slots as never).text).toBe(CLEAN);
+    }
+  });
 });
