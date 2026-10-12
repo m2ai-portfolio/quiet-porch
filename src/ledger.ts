@@ -290,7 +290,7 @@ export function buildLedger(
     // an incident that began before the window start still has its early levels, ages and outputs.
     const all = db
       .prepare(
-        'SELECT level_after, capture_ts AS o_capture, evidence_id AS o_evidence, applied_at FROM event_outcomes WHERE incident_id = ?',
+        'SELECT level_after, capture_ts AS o_capture, evidence_id AS o_evidence, applied_at FROM event_outcomes WHERE incident_id = ? ORDER BY capture_ts, applied_at',
       )
       .all(id) as unknown as EventRow[];
     const levels = levelEntries(all);

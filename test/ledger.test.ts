@@ -415,7 +415,6 @@ describe('fixture validation (examiner round 1)', () => {
 
 describe('ledger honesty, third pass', () => {
   const fx = loadFixture(fixturePath);
-  const opts = { timezone: TZ, start: '20:00', end: '06:30', dryRun: false };
   const live = async () => {
     const r = await runReplay(fx, { keepDb: true });
     r.db!.exec("UPDATE action_intents SET status = 'done'; UPDATE decisions SET dry_run = 0");
@@ -488,6 +487,27 @@ describe('ledger honesty, third pass', () => {
     )!;
     expect(handledSentence(w, TZ, isExterior)).toContain('A person was in the yard, so it stopped');
     expect(handledSentence(w, TZ, isExterior)).not.toContain('expected');
+    r.db!.close();
+  });
+
+  it('dwell does not depend on the order outcome rows were written (round 4)', async () => {
+    const r = await live();
+    const before = buildLedger(r.db!, { from: 0, to: 9e15 }).lines.find(
+      (l) => l.profile === 'intruder',
+    )!;
+    // re-write the first two person frames so they come last in rowid order
+    r.db!.exec(
+      "CREATE TEMP TABLE keep AS SELECT * FROM event_outcomes WHERE source_event_id IN ('syn-gate-0','syn-gate-1'); " +
+        "DELETE FROM event_outcomes WHERE source_event_id IN ('syn-gate-0','syn-gate-1'); " +
+        'INSERT INTO event_outcomes SELECT * FROM keep',
+    );
+    const after = buildLedger(r.db!, { from: 0, to: 9e15 }).lines.find(
+      (l) => l.profile === 'intruder',
+    )!;
+    expect(after.levels.map((e) => [e.level, e.dwell_ms])).toEqual(
+      before.levels.map((e) => [e.level, e.dwell_ms]),
+    );
+    expect(after.levels.every((e) => (e.dwell_ms ?? 0) >= 0)).toBe(true);
     r.db!.close();
   });
 });

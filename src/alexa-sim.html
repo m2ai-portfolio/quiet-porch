@@ -207,10 +207,6 @@
 
       // Phrase -> tool. Order matters: the first match wins.
       const intents = [
-        [
-          /(is (this|it)|are (you|we)) (live|real)|real (night|time)/i,
-          () => ['get_incident_status', {}],
-        ],
         [/stand down|stop|all clear|turn (it|everything) off/i, () => ['stand_down', {}]],
         [
           /stepping out|heading out|expecting (someone|a visitor)/i,
@@ -229,6 +225,12 @@
         [/(recent|what happened|history)/i, () => ['list_recent_incidents', { limit: 5 }]],
         [/(okay|ok\b|status|everything|safe|what'?s going on)/i, () => ['get_incident_status', {}]],
       ];
+
+      // Asked last of the phrase list's mutating intents: "stop, is this real?" must still stop.
+      intents.push([
+        /\b(is (this|it)|are (you|we)) (live|real)( right now| now)?\s*[?.!]*$/i,
+        () => ['get_incident_status', {}],
+      ]);
 
       let id = 0,
         ready = false;
