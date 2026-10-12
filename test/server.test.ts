@@ -50,7 +50,7 @@ function fakeRing(calls: RingCall[], opts: { failPost?: boolean; pipeline?: bool
       return new Response(null, { status: 303, headers: { Location: 'https://media.test/f1' } });
     }
     if (url === 'https://media.test/f1') {
-      return new Response(new Uint8Array(4), {
+      return new Response(new Uint8Array([0xff, 0xd8, 0, 0]), {
         status: 200,
         headers: {
           'Content-Type': 'image/jpeg',

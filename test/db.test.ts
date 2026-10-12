@@ -133,7 +133,7 @@ describe('migration v2 -> v3', () => {
     const db = openDb(path);
     expect(db.prepare('SELECT COUNT(*) AS n FROM events').get()).toEqual({ n: 1 });
     expect(openIncident(db, 'front', 'wildlife')).not.toBeNull();
-    expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 3 });
+    expect(db.prepare('PRAGMA user_version').get()).toEqual({ user_version: 4 });
   });
 
   it('refuses to drop coordinator rows', () => {

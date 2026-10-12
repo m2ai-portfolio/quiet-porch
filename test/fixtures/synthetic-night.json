@@ -1,0 +1,635 @@
+{
+  "version": 1,
+  "label": "synthetic fixture, not a real night",
+  "synthetic": true,
+  "mode": "away",
+  "config": {
+    "timezone": "America/Chicago",
+    "nightWindow": {
+      "start": "20:00",
+      "end": "06:30"
+    },
+    "zones": {
+      "cam-yard": "front_yard"
+    },
+    "context": {
+      "mode": "away",
+      "knownPets": [],
+      "expectedVisitors": [],
+      "routines": [],
+      "nuisanceSpecies": ["armadillo"]
+    },
+    "followUpProbe": false,
+    "coordinator": {
+      "allowlist": "inline",
+      "publicBase": "https://quiet-porch.example.invalid/ring",
+      "maxIntruderLevel": 4,
+      "cooldownMs": 600000,
+      "ownerUserIds": ["mcp:owner"],
+      "interiorLights": ["light.worklights"],
+      "zones": {
+        "front_yard": {
+          "exteriorLight": "switch.patio_light_socket_1",
+          "valve": "valve.front_yard_sprinkler_valve",
+          "durationSetter": "number.front_yard_sprinkler_irrigation_duration",
+          "speaker": "pi_audio.porch_speaker"
+        }
+      },
+      "clips": {
+        "bark": "bark-5s",
+        "wildlife": "wildlife"
+      }
+    }
+  },
+  "allowlist": {
+    "entities": [
+      {
+        "entity_id": "valve.front_yard_sprinkler_valve",
+        "placement": "exterior",
+        "zones": ["front_yard"],
+        "services": {
+          "open_valve": {},
+          "close_valve": {}
+        }
+      },
+      {
+        "entity_id": "number.front_yard_sprinkler_irrigation_duration",
+        "placement": "exterior",
+        "zones": ["front_yard"],
+        "services": {
+          "set_value": {
+            "params": {
+              "value": {
+                "min": 5,
+                "max": 30
+              }
+            }
+          }
+        },
+        "cleanup_via": "valve.front_yard_sprinkler_valve"
+      },
+      {
+        "entity_id": "switch.patio_light_socket_1",
+        "placement": "exterior",
+        "zones": ["front_yard"],
+        "services": {
+          "turn_on": {},
+          "turn_off": {}
+        }
+      },
+      {
+        "entity_id": "pi_audio.porch_speaker",
+        "placement": "exterior",
+        "zones": ["front_yard"],
+        "services": {
+          "play_clip": {
+            "params": {
+              "clip": {
+                "enum": ["bark-5s", "wildlife"]
+              }
+            }
+          },
+          "stop": {}
+        }
+      },
+      {
+        "entity_id": "light.worklights",
+        "placement": "interior",
+        "zones": [],
+        "services": {
+          "turn_on": {},
+          "turn_off": {}
+        }
+      }
+    ]
+  },
+  "events": [
+    {
+      "received_at": 1791518401000,
+      "webhook": {
+        "meta": {
+          "account_id": "acct-synthetic",
+          "request_id": "req-syn-01"
+        },
+        "data": {
+          "id": "syn-01",
+          "type": "motion_detected",
+          "attributes": {
+            "source": "cam-yard",
+            "timestamp": 1791518400000,
+            "sub_type": "motion"
+          }
+        }
+      },
+      "frames": [
+        {
+          "ts_ring": 1791518400000
+        }
+      ],
+      "ready_after_event_ms": 2000,
+      "model": {
+        "perception": {
+          "subjects": [],
+          "person_present": false,
+          "activity": "nothing",
+          "night_ir": true
+        },
+        "perception_ms": 2400,
+        "critique_ms": 1200
+      }
+    },
+    {
+      "received_at": 1791518461000,
+      "webhook": {
+        "meta": {
+          "account_id": "acct-synthetic",
+          "request_id": "req-syn-02"
+        },
+        "data": {
+          "id": "syn-02",
+          "type": "motion_detected",
+          "attributes": {
+            "source": "cam-yard",
+            "timestamp": 1791518460000,
+            "sub_type": "motion"
+          }
+        }
+      },
+      "frames": [
+        {
+          "ts_ring": 1791518460000
+        }
+      ],
+      "ready_after_event_ms": 2000,
+      "model": {
+        "perception": {
+          "subjects": [
+            {
+              "class": "cat",
+              "confidence": 0.9
+            }
+          ],
+          "person_present": false,
+          "activity": "crossing the yard",
+          "night_ir": true
+        },
+        "perception_ms": 2400,
+        "critique_ms": 1200
+      }
+    },
+    {
+      "received_at": 1791518521000,
+      "webhook": {
+        "meta": {
+          "account_id": "acct-synthetic",
+          "request_id": "req-syn-gate-0"
+        },
+        "data": {
+          "id": "syn-gate-0",
+          "type": "motion_detected",
+          "attributes": {
+            "source": "cam-yard",
+            "timestamp": 1791518520000,
+            "sub_type": "human"
+          }
+        }
+      },
+      "frames": [
+        {
+          "ts_ring": 1791518520000
+        }
+      ],
+      "ready_after_event_ms": 2000,
+      "model": {
+        "perception": {
+          "subjects": [
+            {
+              "class": "person",
+              "confidence": 0.95
+            }
+          ],
+          "person_present": true,
+          "activity": "standing at the side gate",
+          "night_ir": true
+        },
+        "critique": {
+          "verdict": "unknown",
+          "reasons": ["person at night, not expected"]
+        },
+        "perception_ms": 2400,
+        "critique_ms": 1200
+      }
+    },
+    {
+      "received_at": 1791518531000,
+      "webhook": {
+        "meta": {
+          "account_id": "acct-synthetic",
+          "request_id": "req-syn-gate-1"
+        },
+        "data": {
+          "id": "syn-gate-1",
+          "type": "motion_detected",
+          "attributes": {
+            "source": "cam-yard",
+            "timestamp": 1791518530000,
+            "sub_type": "human"
+          }
+        }
+      },
+      "frames": [
+        {
+          "ts_ring": 1791518530000
+        }
+      ],
+      "ready_after_event_ms": 2000,
+      "model": {
+        "perception": {
+          "subjects": [
+            {
+              "class": "person",
+              "confidence": 0.95
+            }
+          ],
+          "person_present": true,
+          "activity": "standing at the side gate",
+          "night_ir": true
+        },
+        "critique": {
+          "verdict": "unknown",
+          "reasons": ["person at night, not expected"]
+        },
+        "perception_ms": 2400,
+        "critique_ms": 1200
+      }
+    },
+    {
+      "received_at": 1791518541000,
+      "webhook": {
+        "meta": {
+          "account_id": "acct-synthetic",
+          "request_id": "req-syn-gate-2"
+        },
+        "data": {
+          "id": "syn-gate-2",
+          "type": "motion_detected",
+          "attributes": {
+            "source": "cam-yard",
+            "timestamp": 1791518540000,
+            "sub_type": "human"
+          }
+        }
+      },
+      "frames": [
+        {
+          "ts_ring": 1791518540000
+        }
+      ],
+      "ready_after_event_ms": 2000,
+      "model": {
+        "perception": {
+          "subjects": [
+            {
+              "class": "person",
+              "confidence": 0.95
+            }
+          ],
+          "person_present": true,
+          "activity": "standing at the side gate",
+          "night_ir": true
+        },
+        "critique": {
+          "verdict": "unknown",
+          "reasons": ["person at night, not expected"]
+        },
+        "perception_ms": 2400,
+        "critique_ms": 1200
+      }
+    },
+    {
+      "received_at": 1791518551000,
+      "webhook": {
+        "meta": {
+          "account_id": "acct-synthetic",
+          "request_id": "req-syn-gate-3"
+        },
+        "data": {
+          "id": "syn-gate-3",
+          "type": "motion_detected",
+          "attributes": {
+            "source": "cam-yard",
+            "timestamp": 1791518550000,
+            "sub_type": "human"
+          }
+        }
+      },
+      "frames": [
+        {
+          "ts_ring": 1791518550000
+        }
+      ],
+      "ready_after_event_ms": 2000,
+      "model": {
+        "perception": {
+          "subjects": [
+            {
+              "class": "person",
+              "confidence": 0.95
+            }
+          ],
+          "person_present": true,
+          "activity": "standing at the side gate",
+          "night_ir": true
+        },
+        "critique": {
+          "verdict": "unknown",
+          "reasons": ["person at night, not expected"]
+        },
+        "perception_ms": 2400,
+        "critique_ms": 1200
+      }
+    },
+    {
+      "received_at": 1791518561000,
+      "webhook": {
+        "meta": {
+          "account_id": "acct-synthetic",
+          "request_id": "req-syn-gate-4"
+        },
+        "data": {
+          "id": "syn-gate-4",
+          "type": "motion_detected",
+          "attributes": {
+            "source": "cam-yard",
+            "timestamp": 1791518560000,
+            "sub_type": "human"
+          }
+        }
+      },
+      "frames": [
+        {
+          "ts_ring": 1791518560000
+        }
+      ],
+      "ready_after_event_ms": 2000,
+      "model": {
+        "perception": {
+          "subjects": [
+            {
+              "class": "person",
+              "confidence": 0.95
+            }
+          ],
+          "person_present": true,
+          "activity": "standing at the side gate",
+          "night_ir": true
+        },
+        "critique": {
+          "verdict": "unknown",
+          "reasons": ["person at night, not expected"]
+        },
+        "perception_ms": 2400,
+        "critique_ms": 1200
+      }
+    },
+    {
+      "received_at": 1791518571000,
+      "webhook": {
+        "meta": {
+          "account_id": "acct-synthetic",
+          "request_id": "req-syn-gate-5"
+        },
+        "data": {
+          "id": "syn-gate-5",
+          "type": "motion_detected",
+          "attributes": {
+            "source": "cam-yard",
+            "timestamp": 1791518570000,
+            "sub_type": "human"
+          }
+        }
+      },
+      "frames": [
+        {
+          "ts_ring": 1791518570000
+        }
+      ],
+      "ready_after_event_ms": 2000,
+      "model": {
+        "perception": {
+          "subjects": [
+            {
+              "class": "person",
+              "confidence": 0.95
+            }
+          ],
+          "person_present": true,
+          "activity": "standing at the side gate",
+          "night_ir": true
+        },
+        "critique": {
+          "verdict": "unknown",
+          "reasons": ["person at night, not expected"]
+        },
+        "perception_ms": 2400,
+        "critique_ms": 1200
+      }
+    },
+    {
+      "received_at": 1791518581000,
+      "webhook": {
+        "meta": {
+          "account_id": "acct-synthetic",
+          "request_id": "req-syn-gate-6"
+        },
+        "data": {
+          "id": "syn-gate-6",
+          "type": "motion_detected",
+          "attributes": {
+            "source": "cam-yard",
+            "timestamp": 1791518580000,
+            "sub_type": "human"
+          }
+        }
+      },
+      "frames": [
+        {
+          "ts_ring": 1791518580000
+        }
+      ],
+      "ready_after_event_ms": 2000,
+      "model": {
+        "perception": {
+          "subjects": [
+            {
+              "class": "person",
+              "confidence": 0.95
+            }
+          ],
+          "person_present": true,
+          "activity": "standing at the side gate",
+          "night_ir": true
+        },
+        "critique": {
+          "verdict": "unknown",
+          "reasons": ["person at night, not expected"]
+        },
+        "perception_ms": 2400,
+        "critique_ms": 1200
+      }
+    },
+    {
+      "received_at": 1791518591000,
+      "webhook": {
+        "meta": {
+          "account_id": "acct-synthetic",
+          "request_id": "req-syn-gate-gone-1"
+        },
+        "data": {
+          "id": "syn-gate-gone-1",
+          "type": "motion_detected",
+          "attributes": {
+            "source": "cam-yard",
+            "timestamp": 1791518590000,
+            "sub_type": "human"
+          }
+        }
+      },
+      "frames": [
+        {
+          "ts_ring": 1791518590000
+        }
+      ],
+      "ready_after_event_ms": 2000,
+      "model": {
+        "perception": {
+          "subjects": [],
+          "person_present": false,
+          "activity": "nothing",
+          "night_ir": true
+        },
+        "perception_ms": 2400,
+        "critique_ms": 1200
+      }
+    },
+    {
+      "received_at": 1791518601000,
+      "webhook": {
+        "meta": {
+          "account_id": "acct-synthetic",
+          "request_id": "req-syn-gate-gone-2"
+        },
+        "data": {
+          "id": "syn-gate-gone-2",
+          "type": "motion_detected",
+          "attributes": {
+            "source": "cam-yard",
+            "timestamp": 1791518600000,
+            "sub_type": "human"
+          }
+        }
+      },
+      "frames": [
+        {
+          "ts_ring": 1791518600000
+        }
+      ],
+      "ready_after_event_ms": 2000,
+      "model": {
+        "perception": {
+          "subjects": [],
+          "person_present": false,
+          "activity": "nothing",
+          "night_ir": true
+        },
+        "perception_ms": 2400,
+        "critique_ms": 1200
+      }
+    },
+    {
+      "received_at": 1791519601000,
+      "webhook": {
+        "meta": {
+          "account_id": "acct-synthetic",
+          "request_id": "req-syn-03"
+        },
+        "data": {
+          "id": "syn-03",
+          "type": "motion_detected",
+          "attributes": {
+            "source": "cam-yard",
+            "timestamp": 1791519600000,
+            "sub_type": "other_motion"
+          }
+        }
+      },
+      "frames": [
+        {
+          "ts_ring": 1791519600000
+        }
+      ],
+      "ready_after_event_ms": 2000,
+      "model": {
+        "perception": {
+          "subjects": [
+            {
+              "class": "armadillo",
+              "confidence": 0.96
+            }
+          ],
+          "person_present": false,
+          "activity": "digging near the bed",
+          "night_ir": true
+        },
+        "critique": {
+          "verdict": "nuisance",
+          "reasons": ["configured nuisance species at night"]
+        },
+        "perception_ms": 2400,
+        "critique_ms": 1200
+      }
+    },
+    {
+      "received_at": 1791519901000,
+      "webhook": {
+        "meta": {
+          "account_id": "acct-synthetic",
+          "request_id": "req-syn-04"
+        },
+        "data": {
+          "id": "syn-04",
+          "type": "motion_detected",
+          "attributes": {
+            "source": "cam-yard",
+            "timestamp": 1791519900000,
+            "sub_type": "motion"
+          }
+        }
+      },
+      "frames": [
+        {
+          "ts_ring": 1791519900000
+        }
+      ],
+      "ready_after_event_ms": 2000,
+      "model": {
+        "perception": {
+          "subjects": [],
+          "person_present": false,
+          "activity": "nothing",
+          "night_ir": true
+        },
+        "perception_ms": 2400,
+        "critique_ms": 1200
+      }
+    }
+  ],
+  "expected_ledger": [
+    "23:00:00 · nothing · front yard · L0 · evidence age 5.4 s · source replay · dry run · silent: nothing to act on",
+    "23:01:00 · cat · front yard · L0 · evidence age 5.4 s · source replay · dry run · silent: nothing to act on",
+    "23:02:00 · person · front yard · L4 (valve) · evidence age 6.6 s · source replay · dry run · stopped: next frame empty 23:03:25",
+    "          L1 at 0 s, age 6.6 s · L2 at 20 s, age 6.6 s · L3 at 40 s, age 6.6 s · L4 at 60 s, age 6.6 s",
+    "23:20:00 · armadillo · front yard · wildlife run · evidence age 6.6 s · source replay · dry run · stopped: run finished 23:20:46",
+    "23:25:00 · nothing · front yard · L0 · evidence age 5.4 s · source replay · dry run · silent: nothing to act on"
+  ]
+}

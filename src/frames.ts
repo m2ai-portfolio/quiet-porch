@@ -81,6 +81,10 @@ export type FrameCheck = { ok: true } | { ok: false; reason: string };
 export function checkEventFrame(a: ImageAttempt, eventTs: number, receivedAt: number): FrameCheck {
   if (a.status !== 200) return { ok: false, reason: `http_${a.status}` };
   if (!a.content_type?.startsWith('image/jpeg')) return { ok: false, reason: 'not_jpeg' };
+  // Encrypted video still answers 200 (Ring docs); only JPEG bytes count as a frame.
+  if (a.image && !(a.image[0] === 0xff && a.image[1] === 0xd8)) {
+    return { ok: false, reason: 'not_jpeg_bytes' };
+  }
   if (a.media_origin !== 'recording') {
     return { ok: false, reason: `origin_${a.media_origin ?? 'missing'}` };
   }

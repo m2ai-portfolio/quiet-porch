@@ -7,10 +7,15 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Mode } from './ladder.ts';
+import { EXPECT_DEFAULT_MINUTES, EXPECT_MAX_MINUTES, type Expectation } from './db.ts';
+import { buildLedger, formatLedger, type LedgerSource } from './ledger.ts';
+import { latestNightWindow } from './nightwindow.ts';
+import { nightReport } from './report.ts';
 
 export const PROTOCOL_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26'];
 const MAX_BODY = 64 * 1024;
 const ALEXA_SIM_HTML = readFileSync(new URL('./alexa-sim.html', import.meta.url), 'utf8');
+const LEDGER_HTML = readFileSync(new URL('./ledger.html', import.meta.url), 'utf8');
 
 export interface McpTokens {
   read: string;
@@ -60,6 +65,18 @@ export interface StatusDeps {
   dryRun: boolean;
   standDown: (incidentId: number, by: string) => Promise<'stopped' | 'not_active'>;
   clearReconcile: (rowId: number, userId: string) => boolean;
+  // "I'm stepping out": the coordinator opens a bounded window in which a person is expected.
+  expectMe: (personLabel: string, minutes: number | undefined, by: string) => Expectation;
+  cancelExpectation: (by: string) => number;
+  // Night window the ledger and the morning report cover (config nightWindow + timezone).
+  night?: { timezone: string; start: string; end: string };
+  // Zones whose camera Ring encrypts; the status answer says they are blind.
+  blindZones?: () => string[];
+  // True for an entity placed outside the house; lets the report say "nothing outside".
+  isExterior?: (entityId: string) => boolean;
+  // Where the frames came from; a replay or sandbox ledger is labelled so on every line.
+  source?: LedgerSource;
+  sourceLabel?: string; // e.g. "replay of 2026-10-12", burned into the ledger page header
   allowedOrigins: string[];
   log: (msg: string) => void;
   now?: () => number;
@@ -104,6 +121,40 @@ function ago(ms: number): string {
   if (s < 90) return `${s} seconds ago`;
   if (s < 5400) return `${Math.round(s / 60)} minutes ago`;
   return `${Math.round(s / 3600)} hours ago`;
+}
+
+// A replayed or sandbox night is labelled on EVERY answer, refusals and errors included, by the
+// one place all tool results pass through. Live and clip-backed answers are left as they are.
+function labelling(deps: StatusDeps): { prefix: string; extra: object } | undefined {
+  const src = deps.source;
+  if (!src || src === 'clip' || src === 'live') return undefined;
+  const name = src === 'replay' ? 'Replay' : 'Sandbox';
+  const label = deps.sourceLabel ? `: ${deps.sourceLabel}` : '';
+  return {
+    prefix: `${name}, not live${label}. `,
+    extra: { source: src, source_label: deps.sourceLabel ?? null },
+  };
+}
+
+// Structured data of a labelled answer: the source fields, and any `text` field labelled too, so a
+// client that reads data.text instead of the content still sees the replay label.
+function labelled(
+  data: object | undefined,
+  mark: { prefix: string; extra: object } | undefined,
+  said: (t: string) => string,
+): object {
+  const out: Record<string, unknown> = { ...(data ?? {}), ...(mark?.extra ?? {}) };
+  if (mark && typeof out.text === 'string') out.text = said(out.text);
+  return out;
+}
+
+// Goes into the ledger and the logs: short, one line, printable.
+export function cleanLabel(raw: unknown): string {
+  const t = String(raw ?? '')
+    .replace(/[^\p{L}\p{N} '.,-]/gu, '')
+    .trim()
+    .slice(0, 40);
+  return t || 'someone expected';
 }
 
 function tokenRole(header: string | undefined, tokens: McpTokens): Role | undefined {
@@ -159,6 +210,10 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
           );
         }
         parts.push(`Mode is ${deps.mode.get()}.`);
+        const blind = deps.blindZones?.() ?? [];
+        for (const z of blind) {
+          parts.push(`The ${z.replace(/_/g, ' ')} camera is blind: its video is encrypted.`);
+        }
         if (deps.killed()) parts.push('The kill switch is on, so nothing will be turned on.');
         if (rows.length) parts.push(`${rows.length} device(s) are waiting for an owner check.`);
         if (deps.dryRun) parts.push('Quiet Porch is in dry run: it only logs what it would do.');
@@ -167,6 +222,9 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
           data: {
             active_incident: inc ?? null,
             mode: deps.mode.get(),
+            blind_zones: blind,
+            source: deps.source ?? 'clip',
+            source_label: deps.sourceLabel ?? null,
             kill_switch: deps.killed(),
             dry_run: deps.dryRun,
             open_reconcile: rows,
@@ -272,6 +330,130 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
           : { text: 'Nothing to clear with that id.', data: { cleared: false } };
       },
     },
+    {
+      name: 'get_night_report',
+      title: 'What happened last night?',
+      description:
+        'The last armed night in one breath: how many events, how many were silent, and one sentence for each one that was handled.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      role: 'read',
+      run: () => {
+        if (!deps.night) return { text: 'The night window is not configured.', isError: true };
+        const span = latestNightWindow(
+          now(),
+          deps.night.start,
+          deps.night.end,
+          deps.night.timezone,
+        );
+        const ledger = buildLedger(db, span, { source: deps.source });
+        const report = nightReport(ledger, span, {
+          ...deps.night,
+          dryRun: deps.dryRun,
+          isExterior: deps.isExterior,
+          source: deps.source,
+        });
+        return {
+          text: report.text,
+          data: {
+            ...report,
+            source: deps.source ?? 'clip',
+            source_label: deps.sourceLabel ?? null,
+            dry_run: deps.dryRun,
+          },
+        };
+      },
+    },
+    {
+      name: 'get_ledger',
+      title: 'The night ledger',
+      description:
+        'Every event of the last armed night, one line each, with the Ring capture time, evidence age, level reached and why it stopped.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      role: 'read',
+      run: () => {
+        if (!deps.night) return { text: 'The night window is not configured.', isError: true };
+        const span = latestNightWindow(
+          now(),
+          deps.night.start,
+          deps.night.end,
+          deps.night.timezone,
+        );
+        const ledger = buildLedger(db, span, { source: deps.source });
+        const c = ledger.counts;
+        return {
+          text: `${c.events} events, ${c.silent} silent, ${c.handled} handled.`,
+          data: {
+            window: { from: span.from, to: span.to, in_progress: span.inProgress },
+            timezone: deps.night.timezone,
+            source: deps.source ?? 'clip',
+            source_label: deps.sourceLabel ?? null,
+            dry_run: deps.dryRun,
+            counts: c,
+            lines: ledger.lines,
+            text_lines: formatLedger(ledger.lines, deps.night.timezone),
+          },
+        };
+      },
+    },
+    {
+      name: 'expect_me',
+      title: "I'm stepping out",
+      description:
+        'Tell Quiet Porch a person at the door is expected for a bounded time, so it stays quiet and records why. At most 60 minutes; pass cancel true to end the window. Owner only.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          person_label: { type: 'string', maxLength: 40 },
+          minutes: {
+            type: 'integer',
+            minimum: 1,
+            maximum: EXPECT_MAX_MINUTES,
+            default: EXPECT_DEFAULT_MINUTES,
+          },
+        },
+        additionalProperties: false,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+      role: 'owner',
+      run: (args) => {
+        const known = new Set(['person_label', 'minutes', 'cancel']);
+        const stray = Object.keys(args).find((k) => !known.has(k));
+        if (stray) return { text: `I do not know the argument ${stray}.`, isError: true };
+        if (args.cancel === true) {
+          if (args.minutes !== undefined || args.person_label !== undefined) {
+            return { text: 'Cancel takes no other argument.', isError: true };
+          }
+          const n = deps.cancelExpectation('mcp:owner');
+          return {
+            text: n ? 'Okay. I will watch for visitors again.' : 'There was no window to cancel.',
+            data: { cancelled: n },
+          };
+        }
+        if (args.cancel !== undefined) return { text: 'Cancel must be true.', isError: true };
+        const m = args.minutes;
+        if (
+          m !== undefined &&
+          !(typeof m === 'number' && Number.isInteger(m) && m >= 1 && m <= EXPECT_MAX_MINUTES)
+        ) {
+          return {
+            text: `Minutes must be a whole number from 1 to ${EXPECT_MAX_MINUTES}.`,
+            isError: true,
+          };
+        }
+        if (args.person_label !== undefined && typeof args.person_label !== 'string') {
+          return { text: 'The label must be text.', isError: true };
+        }
+        const label = cleanLabel(args.person_label);
+        const e = deps.expectMe(label, m, 'mcp:owner');
+        const mins = Math.round((e.expires_at - e.created_at) / 60_000);
+        return {
+          text: `Okay. I will stay quiet about ${label} for ${mins} minutes, and note each time.`,
+          data: { expectation: e },
+        };
+      },
+    },
   ];
 }
 
@@ -328,8 +510,9 @@ export function createStatusMcp(deps: StatusDeps) {
             protocolVersion: PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0],
             capabilities: { tools: { listChanged: false } },
             serverInfo: { name: 'quiet-porch-status', title: 'Quiet Porch', version: '0.1.0' },
+            ...(labelling(deps) ? { _meta: labelling(deps)!.extra } : {}),
             instructions:
-              'Home deterrent status for one house. Use get_incident_status for "is everything okay". stand_down and set_mode need the owner token.',
+              'Home deterrent status for one house. Use get_incident_status for "is everything okay" and get_night_report for "what happened last night". stand_down, set_mode and expect_me need the owner token.',
           },
         };
       }
@@ -352,16 +535,29 @@ export function createStatusMcp(deps: StatusDeps) {
       case 'tools/call': {
         const tool = byName.get(String(params.name));
         if (!tool) return rpcError(id, -32602, `Unknown tool: ${String(params.name)}`);
+        const mark = labelling(deps);
+        const said = (text: string) => (mark ? mark.prefix + text : text);
         if (tool.role === 'owner' && role !== 'owner') {
           deps.log(`mcp: ${tool.name} refused for a read token`);
           return {
             jsonrpc: '2.0',
             id,
             result: {
-              content: [{ type: 'text', text: 'That needs the owner. I can only report status.' }],
+              content: [
+                { type: 'text', text: said('That needs the owner. I can only report status.') },
+              ],
+              ...(mark ? { structuredContent: mark.extra } : {}),
               isError: true,
             },
           };
+        }
+        // Omitted and null both mean "no arguments" (some MCP clients send null).
+        if (
+          params.arguments !== undefined &&
+          params.arguments !== null &&
+          (typeof params.arguments !== 'object' || Array.isArray(params.arguments))
+        ) {
+          return rpcError(id, -32602, 'arguments must be an object');
         }
         const args = (params.arguments ?? {}) as Record<string, unknown>;
         try {
@@ -371,8 +567,8 @@ export function createStatusMcp(deps: StatusDeps) {
             jsonrpc: '2.0',
             id,
             result: {
-              content: [{ type: 'text', text: r.text }],
-              ...(r.data ? { structuredContent: r.data } : {}),
+              content: [{ type: 'text', text: said(r.text) }],
+              ...(r.data || mark ? { structuredContent: labelled(r.data, mark, said) } : {}),
               ...(r.isError ? { isError: true } : {}),
             },
           };
@@ -381,7 +577,11 @@ export function createStatusMcp(deps: StatusDeps) {
           return {
             jsonrpc: '2.0',
             id,
-            result: { content: [{ type: 'text', text: 'Something went wrong.' }], isError: true },
+            result: {
+              content: [{ type: 'text', text: said('Something went wrong.') }],
+              ...(mark ? { structuredContent: mark.extra } : {}),
+              isError: true,
+            },
           };
         }
       }
@@ -400,6 +600,13 @@ export function createStatusMcp(deps: StatusDeps) {
           'Cache-Control': 'no-store',
         });
         return res.end(ALEXA_SIM_HTML);
+      }
+      if (req.method === 'GET' && url.pathname === '/ledger') {
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Cache-Control': 'no-store',
+        });
+        return res.end(LEDGER_HTML);
       }
       if (url.pathname !== '/mcp') return json(res, 404, { error: 'not found' });
       // DNS-rebinding guard (spec: servers MUST validate Origin when present).

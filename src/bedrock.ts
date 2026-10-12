@@ -18,6 +18,7 @@ export interface ConverseResult {
   inputTokens: number;
   outputTokens: number;
   latencyMs: number;
+  requestId?: string; // x-amzn-requestid, for the friction log
 }
 
 export function bedrockConfigFromEnv(env: NodeJS.ProcessEnv = process.env): BedrockConfig {
@@ -55,9 +56,10 @@ export async function converse(
     }),
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
   });
+  const requestId = res.headers.get('x-amzn-requestid') ?? undefined;
   if (!res.ok) {
     const detail = (await res.text()).slice(0, 300);
-    throw new Error(`bedrock: HTTP ${res.status} ${detail}`);
+    throw new Error(`bedrock: HTTP ${res.status}${requestId ? ` [${requestId}]` : ''} ${detail}`);
   }
   const body = (await res.json()) as {
     output?: { message?: { content?: { text?: string }[] } };
@@ -72,6 +74,7 @@ export async function converse(
     inputTokens: body.usage?.inputTokens ?? 0,
     outputTokens: body.usage?.outputTokens ?? 0,
     latencyMs: Date.now() - started,
+    ...(requestId ? { requestId } : {}),
   };
 }
 

@@ -12,14 +12,21 @@ import type { DatabaseSync } from 'node:sqlite';
 import { actuatorFor, type Actuators } from './actuators.ts';
 import { checkAction, CLEANUP_SERVICE, domainOf, type Allowlist } from './allowlist.ts';
 import {
+  activeExpectation,
   activeIncident,
+  cancelExpectations,
   closeIncident,
   completeIntent,
   convertPendingIntents,
+  createExpectation,
+  EXPECT_DEFAULT_MINUTES,
+  EXPECT_GRACE_MS,
   openIncident,
   openReconcile,
   openReconcileEntities,
   recordIntent,
+  recordOutcome,
+  type Expectation,
   type IncidentRow,
   type Profile,
 } from './db.ts';
@@ -70,6 +77,7 @@ export const defaultClock: CoordClock = {
 
 // What the pipeline hands over for each decided event.
 export interface Evaluation {
+  sourceEventId?: string; // Ring event id; ties the outcome to the night ledger
   zone: string;
   kind: DecisionKind;
   reason: string;
@@ -383,6 +391,42 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     }
   }
 
+  // ---- night ledger + "I'm stepping out" ----
+
+  function outcome(
+    ev: Evaluation,
+    o: {
+      kind: 'incident' | 'expected' | 'not_opened';
+      incidentId?: number;
+      level?: number;
+      note?: string;
+    },
+  ) {
+    if (!ev.sourceEventId) return;
+    recordOutcome(
+      db,
+      {
+        sourceEventId: ev.sourceEventId,
+        incidentId: o.incidentId,
+        outcome: o.kind,
+        levelAfter: o.level,
+        evidenceId: ev.evidenceId,
+        captureTs: ev.captureTs,
+        note: o.note,
+      },
+      clock.now(),
+    );
+  }
+
+  // The owner said the person is expected: the intruder ladder stays at L0 for this event.
+  // `graceMs` lets a frame captured just before the owner spoke count. It is 0 when a ladder is
+  // already running: a frame taken before the window must not end a run that began before it.
+  function expectedWindow(ev: Evaluation, graceMs = EXPECT_GRACE_MS): Expectation | undefined {
+    return ev.kind === 'intruder'
+      ? activeExpectation(db, clock.now(), ev.captureTs ?? clock.now(), graceMs)
+      : undefined;
+  }
+
   // ---- step execution (inside the action chain) ----
 
   async function runStep(s: Step, ctx: Ctx): Promise<void> {
@@ -449,12 +493,13 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     id: number,
     status: 'cancelled' | 'exited',
     reason: string,
-    opts: { cleanupEntities?: boolean } = {},
+    opts: { cleanupEntities?: boolean; cooldown?: boolean } = {},
   ): Promise<void> {
     const inc = incidentById(id);
     if (!inc || inc.status !== 'active') return;
     closeIncident(db, id, status, reason, clock.now()); // version bump: queued steps abort
-    setCooldown(inc.zone, inc.profile);
+    // An "expected" end is the owner's word, not a run that needs a cool-off.
+    if (opts.cooldown !== false) setCooldown(inc.zone, inc.profile);
     log({ event: 'incident_closed', incident_id: id, status, reason, profile: inc.profile });
     if (opts.cleanupEntities === false) return;
     for (let i = reverts.length - 1; i >= 0; i--)
@@ -479,6 +524,12 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
       maxLevel: cfg.maxIntruderLevel,
     });
     saveLadder(inc.id, r.state, ev.evidenceId);
+    outcome(ev, {
+      kind: 'incident',
+      incidentId: inc.id,
+      level: r.state.level,
+      note: r.exit ? `exit:${r.exit}` : ev.reason,
+    });
     if (r.exit) return endIncident(inc.id, 'exited', r.exit);
     const ctx: Ctx = {
       incidentId: inc.id,
@@ -507,6 +558,7 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
       skipped: plan.skipped,
     });
     const inc = incidentById(id)!;
+    outcome(ev, { kind: 'incident', incidentId: id, note: ev.reason });
     void enqueue(plan.steps, {
       incidentId: id,
       maxEvidenceAgeMs: cfg.wildlifeMaxEvidenceAgeMs + WILDLIFE_STEP_BUDGET_MS,
@@ -545,6 +597,16 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     await advance(activeIncident(db)!, ev);
   }
 
+  function suppress(ev: Evaluation, exp: Expectation): void {
+    outcome(ev, { kind: 'expected', level: 0, note: exp.person_label });
+    log({
+      event: 'expected_window',
+      zone: ev.zone,
+      person: exp.person_label,
+      until: exp.expires_at,
+    });
+  }
+
   async function onEvaluationInner(ev: Evaluation): Promise<void> {
     if (ev.kind === 'killed' || ev.reason === 'camera_busy') return;
     if (ev.evidenceId && ev.captureTs !== undefined) {
@@ -567,27 +629,68 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
         return;
       }
       if (inc.profile === 'wildlife') {
-        if (ev.kind === 'intruder') return preempt(inc, ev);
+        if (ev.kind === 'intruder') {
+          const exp = expectedWindow(ev);
+          if (exp) {
+            // Someone is in the yard: the sprinkler stops either way. Expected means no
+            // ladder, not that the valve keeps running.
+            outcome(ev, {
+              kind: 'expected',
+              incidentId: inc.id,
+              level: 0,
+              note: exp.person_label,
+            });
+            log({ event: 'expected_ends_wildlife', incident_id: inc.id, person: exp.person_label });
+            // The wildlife cooldown stays: a second wildlife frame must not re-open the
+            // sprinkler on a yard that holds an expected person.
+            return endIncident(inc.id, 'cancelled', `expected:${exp.person_label}`);
+          }
+          return preempt(inc, ev);
+        }
         log({ event: 'during_wildlife', incident_id: inc.id, kind: ev.kind, reason: ev.reason });
         return;
       }
       if (ev.kind === 'wildlife') log({ event: 'wildlife_during_intruder', incident_id: inc.id });
+      const exp = expectedWindow(ev, 0); // no pre-window grace for a run already under way
+      if (exp) {
+        outcome(ev, {
+          kind: 'expected',
+          incidentId: inc.id,
+          level: inc.level,
+          note: exp.person_label,
+        });
+        log({ event: 'expected_ends_incident', incident_id: inc.id, person: exp.person_label });
+        return endIncident(inc.id, 'cancelled', `expected:${exp.person_label}`, {
+          cooldown: false,
+        });
+      }
       return advance(inc, ev);
     }
     if (ev.kind === 'intruder') {
-      if (deps.killed()) return log({ event: 'not_opened', reason: 'kill_switch', zone: ev.zone });
+      if (deps.killed()) {
+        outcome(ev, { kind: 'not_opened', note: 'kill_switch' });
+        return log({ event: 'not_opened', reason: 'kill_switch', zone: ev.zone });
+      }
+      const exp = expectedWindow(ev);
+      if (exp) return suppress(ev, exp);
       if (cooldownActive(ev.zone, 'intruder')) {
+        outcome(ev, { kind: 'not_opened', note: 'intruder_cooldown' });
         return log({ event: 'not_opened', reason: 'intruder_cooldown', zone: ev.zone });
       }
       const p = openWithLadder(ev.zone, ev);
       return p ?? onEvaluationInner(ev);
     }
     if (ev.kind === 'wildlife') {
-      if (deps.killed()) return log({ event: 'not_opened', reason: 'kill_switch', zone: ev.zone });
+      if (deps.killed()) {
+        outcome(ev, { kind: 'not_opened', note: 'kill_switch' });
+        return log({ event: 'not_opened', reason: 'kill_switch', zone: ev.zone });
+      }
       if (cooldownActive(ev.zone, 'wildlife')) {
+        outcome(ev, { kind: 'not_opened', note: 'wildlife_cooldown' });
         return log({ event: 'not_opened', reason: 'wildlife_cooldown', zone: ev.zone });
       }
       if (ev.captureTs === undefined || clock.now() - ev.captureTs > cfg.wildlifeMaxEvidenceAgeMs) {
+        outcome(ev, { kind: 'not_opened', note: 'stale_evidence' });
         return log({ event: 'not_opened', reason: 'stale_evidence', zone: ev.zone });
       }
       return startWildlife(ev);
@@ -623,6 +726,25 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     if (!inc || inc.status !== 'active') return 'not_active';
     await endIncident(incidentId, 'cancelled', `stand_down:${by}`);
     return 'stopped';
+  }
+
+  // "I'm stepping out": for a bounded window a person at the door is expected, so the intruder
+  // ladder stays at L0 and each suppressed event is a ledger line saying "expected".
+  function expectMe(personLabel: string, minutes: number | undefined, by: string): Expectation {
+    const e = createExpectation(
+      db,
+      { personLabel, minutes: minutes ?? EXPECT_DEFAULT_MINUTES, createdBy: by },
+      clock.now(),
+    );
+    log({ event: 'expect_me', person: personLabel, until: e.expires_at, by });
+    return e;
+  }
+
+  // Ends every open expect_me window now. Returns how many were open.
+  function cancelExpectation(by: string): number {
+    const n = cancelExpectations(db, clock.now());
+    log({ event: 'expect_me_cancelled', windows: n, by });
+    return n;
   }
 
   async function tick(): Promise<void> {
@@ -725,6 +847,8 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     standDown,
     tick,
     clearReconcile,
+    expectMe,
+    cancelExpectation,
     idle: () => Promise.all([evalChain, actionChain]).then(() => undefined),
   };
 }

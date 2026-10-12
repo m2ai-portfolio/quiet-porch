@@ -65,3 +65,37 @@ describe('converse', () => {
     await expect(converse(cfg, [{ text: 'x' }], { fetchImpl: empty })).rejects.toThrow(/no text/);
   });
 });
+
+describe('request ids for the friction log', () => {
+  const ok = (headers: Record<string, string>) =>
+    (async () =>
+      new Response(
+        JSON.stringify({
+          output: { message: { content: [{ text: 'hi' }] } },
+          stopReason: 'end_turn',
+          usage: { inputTokens: 3, outputTokens: 1 },
+        }),
+        { status: 200, headers },
+      )) as unknown as typeof fetch;
+  const cfg = { region: 'us-east-1', modelId: 'm', apiKey: 'k' };
+
+  it('keeps x-amzn-requestid from a good answer and puts it in an error message', async () => {
+    const r = await converse(cfg, [{ text: 'x' }], {
+      fetchImpl: ok({ 'x-amzn-requestid': 'rid-123' }),
+    });
+    expect(r.requestId).toBe('rid-123');
+    const bad = (async () =>
+      new Response('nope', {
+        status: 429,
+        headers: { 'x-amzn-requestid': 'rid-9' },
+      })) as unknown as typeof fetch;
+    await expect(converse(cfg, [{ text: 'x' }], { fetchImpl: bad })).rejects.toThrow(
+      'HTTP 429 [rid-9]',
+    );
+  });
+
+  it('has no requestId field when the service sent none', async () => {
+    const r = await converse(cfg, [{ text: 'x' }], { fetchImpl: ok({}) });
+    expect(r).not.toHaveProperty('requestId');
+  });
+});

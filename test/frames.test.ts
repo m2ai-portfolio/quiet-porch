@@ -247,3 +247,58 @@ describe('downloadImageAt', () => {
     });
   });
 });
+
+describe('encrypted video still answers 200 (Ring docs)', () => {
+  it('a 200 whose bytes are not a JPEG is refused as not_jpeg_bytes', () => {
+    const t = 1_791_400_000_000;
+    const base = {
+      status: 200,
+      step: 2 as const,
+      content_type: 'image/jpeg',
+      media_timestamp: t,
+      media_origin: 'recording',
+    };
+    expect(
+      checkEventFrame({ ...base, image: Buffer.from([0x01, 0x02, 0x03]) }, t, t + 500),
+    ).toEqual({ ok: false, reason: 'not_jpeg_bytes' });
+    expect(checkEventFrame({ ...base, image: Buffer.from([0xff, 0xd8, 1]) }, t, t + 500)).toEqual({
+      ok: true,
+    });
+  });
+});
+
+describe('downloadImageAt request ids', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('keeps the request id of the step-1 POST, on success and on a refusal', async () => {
+    let n = 0;
+    vi.stubGlobal('fetch', async () => {
+      n++;
+      if (n === 1) {
+        return new Response(null, {
+          status: 303,
+          headers: { Location: 'https://media/x', 'X-Request-Id': 'rid-post' },
+        });
+      }
+      return new Response(new Uint8Array([0xff, 0xd8]), {
+        status: 200,
+        headers: { 'Content-Type': 'image/jpeg', 'X-Media-Origin': 'recording' },
+      });
+    });
+    const ok = await downloadImageAt('AT', 'dev-1', 1);
+    expect(ok.request_id).toBe('rid-post');
+    expect(ok).not.toHaveProperty('media_request_id');
+
+    vi.stubGlobal(
+      'fetch',
+      async () =>
+        new Response('{"error":"RECORDING_NOT_READY"}', {
+          status: 425,
+          headers: { 'x-amzn-RequestId': 'rid-425' },
+        }),
+    );
+    const refused = await downloadImageAt('AT', 'dev-1', 1);
+    expect(refused).toMatchObject({ status: 425, step: 1, request_id: 'rid-425' });
+    expect(refused.error_code).toBe('RECORDING_NOT_READY');
+  });
+});

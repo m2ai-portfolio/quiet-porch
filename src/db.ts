@@ -7,7 +7,7 @@
 //     open reconcile row before any event is accepted.
 import { DatabaseSync } from 'node:sqlite';
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS events (
@@ -111,6 +111,30 @@ CREATE TABLE IF NOT EXISTS decisions (
   decided_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS decisions_by_time ON decisions (decided_at);
+
+-- What the coordinator did with each evaluated event (v4, night ledger). A webhook event with no
+-- row here was silent: the pipeline logged it and nothing acted. incident_id and level_after tie
+-- an event to the ladder; capture_ts is the Ring frame time, applied_at is when we used it.
+CREATE TABLE IF NOT EXISTS event_outcomes (
+  source_event_id TEXT PRIMARY KEY,
+  incident_id INTEGER REFERENCES incidents (id),
+  outcome TEXT NOT NULL CHECK (outcome IN ('incident', 'expected', 'not_opened')),
+  level_after INTEGER NOT NULL DEFAULT 0 CHECK (level_after BETWEEN 0 AND 4),
+  evidence_id TEXT,
+  capture_ts INTEGER,
+  note TEXT,
+  applied_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS event_outcomes_by_incident ON event_outcomes (incident_id);
+
+-- "I'm stepping out" windows (expect_me). Newest unexpired row wins.
+CREATE TABLE IF NOT EXISTS expectations (
+  id INTEGER PRIMARY KEY,
+  person_label TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_by TEXT NOT NULL
+);
 `;
 
 // v2 -> v3 rebuilds the coordinator tables (incidents gain a profile and ladder state,
@@ -387,4 +411,90 @@ export function recordDecision(
       now,
     );
   return Number(r.lastInsertRowid);
+}
+
+export type OutcomeKind = 'incident' | 'expected' | 'not_opened';
+
+// One row per evaluated event; a repeat for the same event keeps the first (INSERT OR IGNORE).
+export function recordOutcome(
+  db: DatabaseSync,
+  o: {
+    sourceEventId: string;
+    incidentId?: number;
+    outcome: OutcomeKind;
+    levelAfter?: number;
+    evidenceId?: string;
+    captureTs?: number;
+    note?: string;
+  },
+  now = Date.now(),
+): void {
+  db.prepare(
+    'INSERT OR IGNORE INTO event_outcomes (source_event_id, incident_id, outcome, level_after, evidence_id, capture_ts, note, applied_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(
+    o.sourceEventId,
+    o.incidentId ?? null,
+    o.outcome,
+    o.levelAfter ?? 0,
+    o.evidenceId ?? null,
+    o.captureTs ?? null,
+    o.note ?? null,
+    now,
+  );
+}
+
+export interface Expectation {
+  id: number;
+  person_label: string;
+  created_at: number;
+  expires_at: number;
+}
+
+export const EXPECT_MAX_MINUTES = 60;
+export const EXPECT_DEFAULT_MINUTES = 10;
+
+export function createExpectation(
+  db: DatabaseSync,
+  e: { personLabel: string; minutes: number; createdBy: string },
+  now = Date.now(),
+): Expectation {
+  const minutes = Math.min(EXPECT_MAX_MINUTES, Math.max(1, Math.round(e.minutes)));
+  const expires = now + minutes * 60_000;
+  const r = db
+    .prepare(
+      'INSERT INTO expectations (person_label, created_at, expires_at, created_by) VALUES (?, ?, ?, ?)',
+    )
+    .run(e.personLabel, now, expires, e.createdBy);
+  return {
+    id: Number(r.lastInsertRowid),
+    person_label: e.personLabel,
+    created_at: now,
+    expires_at: expires,
+  };
+}
+
+// A frame counts as expected if it was captured inside the window, give or take this grace
+// before the owner spoke (they say it at the door, the camera has already seen them).
+export const EXPECT_GRACE_MS = 10_000;
+
+// `at` is the Ring capture time of the frame being judged (default: now), so a stale frame is
+// never matched to a window that opened after it was taken.
+export function activeExpectation(
+  db: DatabaseSync,
+  now = Date.now(),
+  at = now,
+  graceMs = EXPECT_GRACE_MS,
+): Expectation | undefined {
+  return db
+    .prepare(
+      'SELECT id, person_label, created_at, expires_at FROM expectations WHERE created_at - ? <= ? AND expires_at > ? AND expires_at > ? ORDER BY id DESC LIMIT 1',
+    )
+    .get(graceMs, at, at, now) as Expectation | undefined;
+}
+
+// Ends every open window now; returns how many were open.
+export function cancelExpectations(db: DatabaseSync, now = Date.now()): number {
+  return Number(
+    db.prepare('UPDATE expectations SET expires_at = ? WHERE expires_at > ?').run(now, now).changes,
+  );
 }
