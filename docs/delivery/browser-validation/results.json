@@ -1,0 +1,92 @@
+{
+  "browser": "153.0.8010.12",
+  "url": "http://10.0.0.46:3472",
+  "results": [
+    {
+      "name": "LAN document rendered",
+      "passed": true,
+      "detail": "Quiet Porch · Rehearsal"
+    },
+    {
+      "name": "Synthetic safety label visible",
+      "passed": true,
+      "detail": "No physical outputs"
+    },
+    {
+      "name": "Night ledger populated",
+      "passed": true,
+      "detail": 5
+    },
+    {
+      "name": "Ledger evidence expands",
+      "passed": true,
+      "detail": "expanded"
+    },
+    {
+      "name": "Unknown filter applies",
+      "passed": true,
+      "detail": "night has no unknown rows"
+    },
+    {
+      "name": "Active incident exposed",
+      "passed": true,
+      "detail": "Simulated incident 1 at L3"
+    },
+    {
+      "name": "Stand down clears incident",
+      "passed": true,
+      "detail": "No active simulated incident"
+    },
+    {
+      "name": "Expected window closes active incident",
+      "passed": true,
+      "detail": "Stop disabled, cancel enabled"
+    },
+    {
+      "name": "Cancel does not resurrect stopped incident",
+      "passed": true,
+      "detail": "stop remains disabled"
+    },
+    {
+      "name": "Scenario empty renders",
+      "passed": true,
+      "detail": "No recorded events, 8 PM to 6:30 AM. Delivery coverage is unverified; this does not prove a quiet night. Quiet Porch is in dry run, so nothing was actually switched."
+    },
+    {
+      "name": "Scenario historical renders",
+      "passed": true,
+      "detail": "Two events. One silent. One outcomes unknown, not counted as silent. Quiet Porch is in dry run, so nothing was actually switched."
+    },
+    {
+      "name": "Scenario secondary renders",
+      "passed": true,
+      "detail": "Four events. One silent. Three held back (kill switch, cooldown or old evidence), nothing acted on. Quiet Porch is in dry run, so nothing was actually switched."
+    },
+    {
+      "name": "Review note survives browser reload",
+      "passed": true,
+      "detail": "saved note restored"
+    },
+    {
+      "name": "Mobile no horizontal overflow",
+      "passed": true,
+      "detail": {
+        "scroll": 390,
+        "viewport": 390
+      }
+    },
+    {
+      "name": "JavaScript and network error-free",
+      "passed": true,
+      "detail": []
+    }
+  ],
+  "errors": [],
+  "warnings": [
+    {
+      "text": "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "url": "http://10.0.0.46:3472/favicon.ico"
+    }
+  ],
+  "restoredOriginalPreferences": true
+}

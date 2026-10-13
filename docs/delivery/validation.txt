@@ -12,5 +12,5 @@ bash -n scripts/pi/qp-speak scripts/rehearsal-service — passed.
 ffprobe wildlife-synthetic.mp4 — 10.000 seconds; rehearsal-cut.mp4 — 175.000 seconds.
 Production npm audit --omit=dev — 0 vulnerabilities.
 LAN HTTP GET verified; simulated controls and restart persistence tested through HTTP.
-No connected browser surface: rendering, mobile and browser speech unverified.
+Follow-up: installed Chromium 153 rendered 15 checks successfully at desktop, Surface-sized and mobile viewports. CUA desktop/browser connection remains absent for this delegated thread; actual Surface hardware and audible browser speech remain unverified. Artifacts in browser-validation/.
 No Ring/Bedrock/Polly/HA/SSH hardware traffic, private footage inspection, account linking or production deployment.

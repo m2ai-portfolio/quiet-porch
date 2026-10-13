@@ -66,7 +66,7 @@
       "workstream": "Decision ledger",
       "status": "Implemented / validated",
       "evidence": "Unknown outcomes, precise two-empty-frame departure, per-level source/age, completed speech and action outcomes, filter/detail frontend.",
-      "limits": "Rendered browser/mobile layout unavailable to verify. Legacy events without sufficient outcomes remain unknown."
+      "limits": "Rendered layout and workflows now verified in Chromium desktop/Surface-sized/mobile viewports. Actual Surface hardware untested; legacy missing outcomes remain unknown."
     },
     {
       "id": "F9",
@@ -115,7 +115,19 @@
       "workstream": "Interactive app / durable handoff",
       "status": "Hosted / HTTP validated",
       "evidence": "Synthetic-only LAN frontend at 10.0.0.46:3472; dedicated transient user service; persistent preferences/notes and derived ledger export; run/restart source kept in project.",
-      "limits": "No connected browser was available: no rendered UI, mobile or browser speech verification. Surface reachability beyond server-side LAN checks untested."
+      "limits": "15 Chromium rendered checks passed after delegated-thread CUA lacked a provider. Actual Surface and audible browser speech untested; CUA interactive connection remains absent."
     }
-  ]
+  ],
+  "browserValidation": {
+    "browser": "Chromium 153",
+    "checksPassed": 15,
+    "viewports": [
+      "desktop",
+      "Surface-sized",
+      "mobile"
+    ],
+    "actualSurfaceTested": false,
+    "audibleBrowserSpeechTested": false,
+    "interactiveCuaConnection": "still absent"
+  }
 }
