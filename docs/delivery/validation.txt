@@ -1,16 +1,89 @@
-Quiet Porch local validation — October 12, 2026 America/Chicago
+Quiet Porch validation record, updated October 13, 2026 (America/Chicago)
 
-Baseline refreshed main 487af6468c6672b7d20f0190c48c8b488e569fba: 269 tests, 20 files; typecheck/lint passed.
-Final: npm test — 291 passed, 22 files, 3.19 seconds (21:25:54 Chicago).
-npm run typecheck — passed.
-npm run lint — passed.
-npm run build — passed (tsc --noEmit; native Node TypeScript application).
-Speech fixture: node scripts/replay.ts test/fixtures/synthetic-speech-night.json --times 3 — matched expected ledger across 3 runs.
-Explicit legacy bark fixture: 3 replay runs matched after selected timing update.
-git diff --check — passed.
-bash -n scripts/pi/qp-speak scripts/rehearsal-service — passed.
-ffprobe wildlife-synthetic.mp4 — 10.000 seconds; rehearsal-cut.mp4 — 175.000 seconds.
-Production npm audit --omit=dev — 0 vulnerabilities.
-LAN HTTP GET verified; simulated controls and restart persistence tested through HTTP.
-Follow-up: installed Chromium 153 rendered 15 checks successfully at desktop, Surface-sized and mobile viewports. CUA desktop/browser connection remains absent for this delegated thread; actual Surface hardware and audible browser speech remain unverified. Artifacts in browser-validation/.
-No Ring/Bedrock/Polly/HA/SSH hardware traffic, private footage inspection, account linking or production deployment.
+Source labels used below:
+  [run]     run again for this record by the docs-reconcile pass, output checked directly
+  [matt]    Matt's firsthand observation at the speaker
+  [session] reported by the 2026-10-13 attended session; evidence file named; not re-run here
+  [2026-10-12] the earlier local validation record, kept for history
+
+== Software checks ==
+
+[run] npx vitest run, in the quiet-porch-current checkout at commit
+      cd0556cd086e2f10bb69d0513b6ec24e56c1b327, started 2026-10-13T16:46:40-05:00:
+      327 passed, 23 test files, exit 0.
+[run] npx tsc --noEmit at the same commit: passed (exit 0).
+[run] npx vitest run again at 2026-10-13T16:52:59-05:00, with only this record's documentation
+      edits on top of cd0556c: 327 passed, 23 files.
+[2026-10-12] Baseline on refreshed main 487af6468c6672b7d20f0190c48c8b488e569fba: 269 tests,
+      20 files; typecheck and lint passed.
+[2026-10-12] npm test: 291 passed, 22 files (superseded by the 327-test run above).
+[2026-10-12] npm run lint, npm run build (tsc --noEmit; Node runs TypeScript natively): passed.
+[2026-10-12] node scripts/replay.ts test/fixtures/synthetic-speech-night.json --times 3:
+      matched the expected ledger across 3 runs. The explicit legacy bark fixture also matched
+      across 3 runs after the selected timing update.
+[2026-10-12] git diff --check; bash -n scripts/pi/qp-speak scripts/rehearsal-service: passed.
+[2026-10-12] ffprobe: wildlife-synthetic.mp4 10.000 s; rehearsal-cut.mp4 175.000 s.
+[2026-10-12] npm audit --omit=dev: 0 production vulnerabilities.
+[2026-10-12] LAN HTTP GET verified; simulated controls and restart persistence tested over HTTP.
+      Chromium 153 rendered 15 checks at desktop, Surface-sized and mobile viewports
+      (browser-validation/). Audible browser speech on real Surface hardware is unverified.
+
+== Hardware checks, 2026-10-13 (attended, Matt present) ==
+
+Polly synthesis [session; quiet-porch-handoff/qp-14-polly-prewarm.json, events.jsonl QP-14]
+  Voice Ruth, generative engine, us-east-1. Four approved lines synthesized into a private
+  ProBook cache (WAV PCM s16le mono 16 kHz):
+    "You're on camera."                                                 1.192 s audio, 476 ms
+    "You're on camera. The owner has been notified."                    2.939 s audio, 808 ms
+    "You're on camera at the front yard."                               1.960 s audio, 558 ms
+    "You're on camera at the front yard. The owner has been notified."  3.707 s audio, 880 ms
+  With the provider forced to fail: 4 of 4 cached lines served from cache; two uncached
+  driveway lines fell back to the matching cached truthful line. No speaker output in this step.
+
+Spoken line on the Pi [matt; session evidence events.jsonl QP-15]
+  Raspberry Pi with an Anker SoundCore Bluetooth speaker, driven through createPiSpeechPlayer
+  and qp-speak. After 2 minutes of idle, Matt stood at the speaker and heard the full line
+  "You're on camera at the front yard. The owner has been notified."
+  Dispatch from ProBook to playback start: 0.77 to 0.87 s as reported by the session. The
+  evidence log records one value, 865 ms, for this run; the 0.77 s lower bound is reported,
+  not independently re-verified.
+
+Stop [session; events.jsonl QP-16, with Matt confirming what he heard]
+  A 7 s coyote (wildlife) clip was cut at about 3 s; qp-stop returned in 480 ms. A play request
+  dated before the Stop was refused (refused_stop_epoch) and stayed silent. A 5 s bark clip ran
+  to its natural end. Afterwards qp-status was idle with 0 qp-audio units left behind.
+  Both clips are original ElevenLabs sound effects [session; events.jsonl QP-14]. "No
+  copyrighted music" is reported, not independently re-verified.
+
+Speaker keep-awake fix [session; events.jsonl QP-15, QP-16; code in scripts/pi/qp-speaker-setup]
+  Root causes of truncated playback: PipeWire suspended the idle A2DP sink and took about 7 s
+  to resume, and the speaker muted its amp on silence and took about 2 s to wake.
+  qp-speaker-setup installs a WirePlumber rule (A2DP pinned, suspend timeout 0, no pause on
+  idle) and a user unit looping an inaudible 20 Hz keep-alive tone at -40 dBFS (peak 0.01 of
+  full scale, per the script).
+
+Zone A mapping [session; quiet-porch-handoff/tasks.json QP-02, commit 7c34404]
+  Zone A = valve.rf_water_timer_valve_1, duration setter
+  number.rf_water_timer_irrigation_duration_1. Timed tag test: zone A set to 7 min in the Tuya
+  app moved the setter to 420 s; the other three outlets were unchanged. The valve was not
+  opened by the app in this test.
+
+Exterior light: none exists. The example config has no exteriorLight, so the ladder skips L2
+  (src/ladder.ts pushes exterior_light to skipped) and still notifies.
+
+== Component timings, not end to end ==
+
+  Polly synthesis per line:              476 to 880 ms
+  ProBook-to-Pi dispatch to playback:    0.77 to 0.87 s (865 ms in the evidence log)
+  qp-stop return:                        480 ms
+  None of these is a Ring-event-to-audio latency. That number has not been measured.
+
+== Still open ==
+
+  - Trusted camera capture timestamps: the live decoder and capture-time mapping are
+    unvalidated (live capture timing is a recorded no-go; see capture-time-provenance.md).
+  - Real Ring-event-to-audio latency: unmeasured.
+  - App-driven sprinkler operation, the 30-second valve self-shutoff and recovery: untested.
+  - Second-household validation: none.
+  - Final footage and demo video: none.
+  - The production service remains dry run.

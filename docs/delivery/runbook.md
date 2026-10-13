@@ -48,13 +48,17 @@ source directly. No bundled deployment is implied. The synthetic golden timing e
 were intentionally updated for Matt's selected 10/20/40-second profile. Legacy bark fixtures
 retain explicit `audioMode: bark`; the new speech fixture exercises the selected behavior.
 
-## Prepare an attended test — do not execute from this runbook
+## Prepare an attended test: do not execute from this runbook
 
-1. Confirm the exact HA valve and irrigation-duration setter corresponding to physical zone A.
-   Never infer them from `front_yard` naming. Confirm exterior light and Pi audio route.
+1. Physical zone A is `valve.rf_water_timer_valve_1` with duration setter
+   `number.rf_water_timer_irrigation_duration_1`, confirmed by a timed tag test on 2026-10-13.
+   Re-read both in HA before any valve run; never infer entities from `front_yard` naming.
+   There is no exterior light: the example config has no `exteriorLight`, so the ladder skips
+   L2. The Pi audio route was verified by attended playback on 2026-10-13.
 2. Cam1 is battery powered (Matt confirmed). Live sessions have a 30-second limit. Measure
    Ring capture-time provenance before treating any decoded stream frame as fresh evidence.
-3. Read `docs/delivery/live-view-spike.md`; no decoder/absolute capture mapping has been proven.
+3. Read `docs/delivery/live-view-spike.md` and `docs/delivery/capture-time-provenance.md`:
+   decoding succeeded in the 2026-10-12 spike, but no absolute capture mapping has been proven.
 4. Speech synthesis uses the AWS credential provider chain, through `pollySynthesizer` in
    `src/speech.ts`. Use only credentials needed for an authorized operation; never print them.
    `createSpeechOutput` prewarms both truthful fallback variants, validates finite PCM and
@@ -66,7 +70,9 @@ retain explicit `audioMode: bark`; the new speech fixture exercises the selected
    idle Bluetooth sink (~7 s to resume) and the speaker mutes its amp on silence (~2 s to wake).
    It installs a WirePlumber rule and an inaudible 20 Hz keep-alive unit; Stop does not touch it.
 5. Speech output accepts at most four seconds; if synthesized audio exceeds that, shorten the
-   approved text/slots rather than truncating words. Real trigger-to-audio <3s is unmeasured.
+   approved text/slots rather than truncating words. Real Ring-event-to-audio latency (target
+   under 3 s) is unmeasured. The 2026-10-13 numbers are components only: Polly synthesis 476 to 880 ms per line, ProBook-to-Pi
+   dispatch to playback start 0.77 to 0.87 s, `qp-stop` 480 ms (`docs/delivery/validation.txt`).
 6. Test duration readback, 30-second valve self-shutoff, Stop, expected-window cleanup,
    unavailable devices, timeout/reconcile and restart in an attended, bounded session.
 7. Preserve source evidence privately. Export fixtures outside the public repository with the
@@ -79,8 +85,9 @@ retain explicit `audioMode: bark`; the new speech fixture exercises the selected
 
 Speech and 10/20/40-second escalation are selected. Two-empty-frame departure and existing
 multiple-notification behavior remain; the brief's one-empty-frame/single-alert claims were
-corrected. Zone A mapping, speaker path, live capture-time proof, account access, official
-watermark interpretation and companion-package qualification remain unresolved.
+corrected. Zone A mapping and the speaker path were resolved on 2026-10-13. Live capture-time
+proof, account access, official watermark interpretation and companion-package qualification
+remain unresolved.
 
 Configure `primaryAccountId` explicitly before any actual coordinator path is considered.
 Absent configuration grants no actuation authority to any arriving account. First arrival

@@ -26,7 +26,8 @@ pipeline.ts
    |
    v
 coordinator.ts: one active incident, write-ahead intents, cooldowns, cleanup, reconcile
-   ladder.ts      L1 interior lights + notify, L2 exterior light, L3 descriptive speech, L4 sprinkler
+   ladder.ts      L1 interior lights + notify, L2 exterior light (skipped when none is configured;
+                  zone A has none), L3 descriptive speech, L4 sprinkler
    allowlist.ts   every Home Assistant call checked; locks, covers and alarms are never allowed
    actuators.ts   Home Assistant REST, Pi speaker, Telegram (or a dry-run simulator)
    |
@@ -43,7 +44,17 @@ ladder are deterministic code, and escalation needs fresh evidence (stale frames
 
 Running live in **dry run**: real Ring events and real Bedrock calls, but every actuator call is
 simulated and logged. See [`docs/recon.md`](docs/recon.md) for measured results and
-[`docs/plan-v7.md`](docs/plan-v7.md) for the plan and its gates.
+[`docs/plan-v7.md`](docs/plan-v7.md) for the plan and its gates. The validation record, with a
+source label on every result, is [`docs/delivery/validation.txt`](docs/delivery/validation.txt).
+
+Not yet verified:
+
+- trusted camera capture timestamps for live view (the live decoder and capture-time mapping are
+  unvalidated, so incidents use the recorded event clip);
+- real Ring-event-to-audio latency (only component timings are measured, listed below);
+- app-driven sprinkler operation, the 30-second valve self-shutoff and recovery;
+- a second household;
+- final footage and the demo video.
 
 ## Run
 
@@ -128,12 +139,18 @@ lingering person is one line for the whole incident, with the age at every level
   was verified in an attended test on 2026-10-13. A Raspberry Pi drove an Anker
   SoundCore Bluetooth speaker through the same Pi speech player the app uses (`createPiSpeechPlayer`
   and `qp-speak`). Matt, standing at the speaker, heard the full spoken line after 2 minutes of
-  idle. Dispatch from ProBook to start playback took 0.77 to 0.87 s. That test drove the Pi adapters
+  idle. Dispatch from ProBook to start playback took 0.77 to 0.87 s (range reported by the
+  attended session; its evidence log records 865 ms for this run). That test drove the Pi adapters
   directly, not a live coordinator run from a Ring event. Stop was verified on the same hardware. A
   7-second wildlife clip was cut at about 3 s, `qp-stop` returned in 480 ms, a play request dated
   before the Stop was refused and silent, and a 5-second bark clip ran to its natural end with no
   playback process left behind. Both clips are original ElevenLabs sound effects, with no
-  copyrighted music. The normal service remains dry run. Legacy fixtures retain explicit bark mode.
+  copyrighted music. Before the fix in `scripts/pi/qp-speaker-setup`, the Bluetooth speaker lost
+  the start of every clip: PipeWire took about 7 s to resume its suspended sink, and the
+  speaker took about 2 s to wake its amp after silence. The script installs a WirePlumber rule
+  (A2DP pinned, no suspend) and an inaudible 20 Hz keep-alive tone at -40 dBFS. The timings
+  above are components (Polly synthesis, Pi dispatch, Stop), not Ring-event-to-audio latency.
+  The normal service remains dry run. Legacy fixtures retain explicit bark mode.
 
 Events that were judged actionable but held back (kill switch, cooldown, old evidence) show as
 `held`, never as silent; a camera Ring encrypts shows as `blind`. The morning report never claims

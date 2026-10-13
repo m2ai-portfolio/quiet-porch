@@ -6,8 +6,11 @@ WHEP/RTSPS sections. Session creation uses server-side bearer authentication wit
 WHEP creates a session resource and deletion closes it. RTSPS is an alternative transport.
 Battery sessions last up to 30 seconds; line-powered sessions up to 60 seconds.
 
-No real Ring session was opened: the execution specification excludes live external Ring
-requests. No four-hour hardware spike or live-view go/no-go result is claimed.
+Update: an authorized receive-only Cam1 spike ran on 2026-10-12 (58.478 s
+across three sessions). It decoded H.264 but recorded no reference timestamps, so live capture
+timing is a recorded no-go and incidents keep the clip fallback. See
+[`capture-time-provenance.md`](capture-time-provenance.md). No four-hour hardware spike is
+claimed. The text below describes the software boundary as written before that spike.
 
 Implemented in `src/live-source.ts`:
 
