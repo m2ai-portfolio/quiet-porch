@@ -72,7 +72,7 @@ retain explicit `audioMode: bark`; the new speech fixture exercises the selected
 5. Speech output accepts at most four seconds; if synthesized audio exceeds that, shorten the
    approved text/slots rather than truncating words. Real Ring-event-to-audio latency (target
    under 3 s) is unmeasured. The 2026-10-13 numbers are components only: Polly synthesis 476 to 880 ms per line, ProBook-to-Pi
-   dispatch to playback start 0.77 to 0.87 s, `qp-stop` 480 ms (`docs/delivery/validation.txt`).
+   dispatch to playback start 865 ms, `qp-stop` 480 ms (`docs/delivery/validation.txt`).
 6. Test duration readback, 30-second valve self-shutoff, Stop, expected-window cleanup,
    unavailable devices, timeout/reconcile and restart in an attended, bounded session.
 7. Preserve source evidence privately. Export fixtures outside the public repository with the

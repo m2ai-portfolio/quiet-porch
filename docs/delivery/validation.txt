@@ -44,9 +44,9 @@ Spoken line on the Pi [matt; session evidence events.jsonl QP-15]
   Raspberry Pi with an Anker SoundCore Bluetooth speaker, driven through createPiSpeechPlayer
   and qp-speak. After 2 minutes of idle, Matt stood at the speaker and heard the full line
   "You're on camera at the front yard. The owner has been notified."
-  Dispatch from ProBook to playback start: 0.77 to 0.87 s as reported by the session. The
-  evidence log records one value, 865 ms, for this run; the 0.77 s lower bound is reported,
-  not independently re-verified.
+  Dispatch from ProBook to playback start: 865 ms (events.jsonl QP-15, one run). This is
+  when the Pi began playback, not a measured time to audible sound. An earlier 770 ms run
+  came before the speaker fix, when the audio was lost, so it is not used.
 
 Stop [session; events.jsonl QP-16, with Matt confirming what he heard]
   A 7 s coyote (wildlife) clip was cut at about 3 s; qp-stop returned in 480 ms. A play request
@@ -74,7 +74,7 @@ Exterior light: none exists. The example config has no exteriorLight, so the lad
 == Component timings, not end to end ==
 
   Polly synthesis per line:              476 to 880 ms
-  ProBook-to-Pi dispatch to playback:    0.77 to 0.87 s (865 ms in the evidence log)
+  ProBook-to-Pi dispatch to playback:    865 ms (one recorded run)
   qp-stop return:                        480 ms
   None of these is a Ring-event-to-audio latency. That number has not been measured.
 

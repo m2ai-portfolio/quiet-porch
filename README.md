@@ -139,8 +139,8 @@ lingering person is one line for the whole incident, with the age at every level
   was verified in an attended test on 2026-10-13. A Raspberry Pi drove an Anker
   SoundCore Bluetooth speaker through the same Pi speech player the app uses (`createPiSpeechPlayer`
   and `qp-speak`). Matt, standing at the speaker, heard the full spoken line after 2 minutes of
-  idle. Dispatch from ProBook to start playback took 0.77 to 0.87 s (range reported by the
-  attended session; its evidence log records 865 ms for this run). That test drove the Pi adapters
+  idle. The Pi began playback 865 ms after dispatch from ProBook
+  (one recorded run; time until the sound was heard was not measured separately). That test drove the Pi adapters
   directly, not a live coordinator run from a Ring event. Stop was verified on the same hardware. A
   7-second wildlife clip was cut at about 3 s, `qp-stop` returned in 480 ms, a play request dated
   before the Stop was refused and silent, and a 5-second bark clip ran to its natural end with no
