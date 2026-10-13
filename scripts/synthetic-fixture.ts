@@ -82,6 +82,7 @@ export function syntheticNight(): Fixture {
     synthetic: true,
     mode: 'away',
     config: {
+      primaryAccountId: 'acct-synthetic',
       timezone: 'America/Chicago',
       nightWindow: { start: '20:00', end: '06:30' },
       zones: { [DEVICE]: 'front_yard' },
@@ -94,6 +95,7 @@ export function syntheticNight(): Fixture {
       },
       followUpProbe: false,
       coordinator: {
+        audioMode: 'bark',
         allowlist: 'inline',
         publicBase: 'https://quiet-porch.example.invalid/ring',
         maxIntruderLevel: 4,

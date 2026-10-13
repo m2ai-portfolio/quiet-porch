@@ -36,7 +36,8 @@
     "clips": {
       "bark": "bark-5s",
       "wildlife": "wildlife"
-    }
+    },
+    "audioMode": "speech"
   },
   "mcp": {
     "allowedOrigins": ["http://10.0.0.46:3461", "http://100.64.0.10:3461"]

@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  /><title>Quiet Porch · Rehearsal</title>
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+    body {
+      font: 16px/1.5 system-ui;
+      margin: 0;
+      background: #0e1722;
+      color: #edf2f7;
+    }
+    main {
+      max-width: 1140px;
+      margin: auto;
+      padding: 28px;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 20px;
+    }
+    h1 {
+      font-size: 40px;
+      margin: 0;
+    }
+    h2 {
+      font-size: 19px;
+    }
+    .label {
+      color: #f6c46d;
+      font-weight: 700;
+      letter-spacing: 0.05em;
+    }
+    section {
+      background: #172536;
+      border: 1px solid #35475b;
+      padding: 20px;
+      border-radius: 12px;
+      margin: 18px 0;
+    }
+    .controls {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    button,
+    select,
+    input,
+    textarea {
+      font: inherit;
+      background: #23394d;
+      color: inherit;
+      border: 1px solid #56708b;
+      border-radius: 6px;
+      padding: 10px;
+    }
+    button {
+      cursor: pointer;
+    }
+    button:hover {
+      background: #365570;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    a {
+      color: #add7ff;
+    }
+    .metrics {
+      display: flex;
+      gap: 30px;
+      flex-wrap: wrap;
+    }
+    .metric {
+      font-size: 32px;
+      font-weight: 700;
+    }
+    .metric span {
+      font-size: 14px;
+      display: block;
+      font-weight: 400;
+      color: #b9c7d6;
+    }
+    summary {
+      cursor: pointer;
+      padding: 12px 0;
+      font-family: ui-monospace, monospace;
+    }
+    details {
+      border-top: 1px solid #43536a;
+      padding: 8px 0;
+    }
+    pre {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      color: #c5dae9;
+      font:
+        14px/1.6 ui-monospace,
+        monospace;
+    }
+    textarea {
+      box-sizing: border-box;
+      width: 100%;
+      min-height: 80px;
+    }
+    .muted {
+      color: #bac7d7;
+    }
+    #error {
+      color: #ffb4a8;
+    }
+    .two {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+    .filter {
+      max-width: 200px;
+    }
+    @media (max-width: 700px) {
+      main {
+        padding: 18px;
+      }
+      header {
+        display: block;
+      }
+      h1 {
+        font-size: 32px;
+      }
+      .two {
+        grid-template-columns: 1fr;
+      }
+      .metrics {
+        gap: 18px;
+      }
+    }
+  </style>
+  <main>
+    <header>
+      <div>
+        <div class="label">QUIET PORCH / SYNTHETIC REHEARSAL</div>
+        <h1>Every decision has a record.</h1>
+        <p class="muted">Speech selected · L2 10s · L3 20s · L4 40s · two empty frames stop</p>
+      </div>
+      <div class="label">NO PHYSICAL OUTPUTS</div>
+    </header>
+    <section>
+      <label for="scenario">Rehearsal scenario</label>
+      <div class="controls">
+        <select id="scenario">
+          <option value="night">Full synthetic night</option>
+          <option value="active">Loiterer still present</option>
+          <option value="empty">No recorded events</option>
+          <option value="historical">Historical outcome missing</option>
+          <option value="secondary">Ledger-only second household</option></select
+        ><button id="load">Load scenario</button><button id="refresh">Refresh</button>
+      </div>
+      <p id="error" role="alert"></p>
+      <p id="health" class="muted"></p>
+    </section>
+    <div class="two">
+      <section>
+        <h2>Night summary</h2>
+        <div id="counts" class="metrics"></div>
+        <p id="report"></p>
+        <p id="latency" class="muted"></p>
+      </section>
+      <section>
+        <h2>Simulated owner controls</h2>
+        <p id="active"></p>
+        <div class="controls">
+          <button id="stop">Stand down simulation</button
+          ><button id="expect">I’m stepping out (10 min)</button
+          ><button id="cancel">Cancel expected window</button>
+        </div>
+        <p class="muted">
+          These controls affect only the synthetic rehearsal. Browser speech reads the report on
+          your current device; Pi playback is not invoked.
+        </p>
+        <button id="speak">Read report in browser</button>
+      </section>
+    </div>
+    <section>
+      <h2>Decision ledger</h2>
+      <label for="filter">Show outcome</label>
+      <select id="filter" class="filter">
+        <option value="all">All outcomes</option>
+        <option value="handled">Handled</option>
+        <option value="unknown">Unknown</option>
+        <option value="held">Held / ledger-only</option>
+        <option value="silent">Silent decisions</option>
+      </select>
+      <div id="ledger"></div>
+    </section>
+    <section>
+      <h2>Review note</h2>
+      <p class="muted">Saved in this project’s rehearsal state and restored on restart.</p>
+      <textarea id="note" aria-label="Review note" maxlength="2000"></textarea
+      ><button id="save">Save note</button><span id="saved" aria-live="polite"></span>
+    </section>
+    <section>
+      <h2>Rehearsal materials</h2>
+      <p>
+        <a href="/assets/wildlife.mp4">10-second synthetic wildlife sequence</a> ·
+        <a href="/assets/rehearsal.mp4">175-second caption rehearsal outline</a> ·
+        <a href="/assets/thumbnail.svg">Thumbnail draft</a> ·
+        <a href="/submission">Submission draft</a> · <a href="/delivery">Coverage report</a>
+      </p>
+      <p class="muted">
+        These are labeled preproduction materials. Actual Ring device or simulator footage remains
+        required for the final demo.
+      </p>
+    </section>
+    <footer class="muted">
+      All subjects, camera IDs, times and counts here belong to a hand-built test fixture. They are
+      not observations from a household.
+    </footer>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let state;
+    const stamp = (t) => new Date(t).toLocaleTimeString('en-US', { timeZone: 'America/Chicago' });
+    function render(d) {
+      state = d;
+      $('scenario').value = d.scenario;
+      $('health').textContent = d.label + ' · ' + d.health.detail;
+      $('report').textContent = d.report.text;
+      $('latency').textContent = 'Local report generation: ' + d.reportLatencyMs.toFixed(2) + ' ms';
+      $('active').textContent = d.active
+        ? 'Simulated incident ' + d.active.id + ' at L' + d.active.level
+        : 'No active simulated incident';
+      $('stop').disabled = !d.active;
+      $('cancel').disabled = !d.expected;
+      $('note').value = d.note;
+      $('counts').replaceChildren();
+      for (const [key, label] of [
+        ['events', 'events'],
+        ['silent', 'known no-action'],
+        ['handled', 'handled'],
+        ['unknown', 'unknown'],
+      ]) {
+        const div = document.createElement('div');
+        div.className = 'metric';
+        div.textContent = d.ledger.counts[key] || 0;
+        const small = document.createElement('span');
+        small.textContent = label;
+        div.append(small);
+        $('counts').append(div);
+      }
+      draw();
+    }
+    function draw() {
+      $('ledger').replaceChildren();
+      const rows = state.ledger.lines.filter(
+        (l) => $('filter').value === 'all' || l.kind === $('filter').value,
+      );
+      if (!rows.length) {
+        const p = document.createElement('p');
+        p.textContent = 'No matching recorded events. This does not prove healthy silence.';
+        $('ledger').append(p);
+      }
+      for (const l of rows) {
+        const detail = document.createElement('details');
+        const summary = document.createElement('summary');
+        summary.textContent =
+          stamp(l.ts_ring) +
+          ' · ' +
+          l.what +
+          ' · ' +
+          l.zone.replaceAll('_', ' ') +
+          ' · L' +
+          l.level +
+          ' · ' +
+          l.kind +
+          ' · ' +
+          l.stop_reason;
+        detail.append(summary);
+        const pre = document.createElement('pre');
+        pre.textContent = JSON.stringify(
+          {
+            source: l.source,
+            dryRun: l.dry_run,
+            evidenceAgeMs: l.evidence_age_ms,
+            levels: l.levels,
+            spokenText: l.spoken_text,
+            actions: l.actions,
+          },
+          null,
+          2,
+        );
+        detail.append(pre);
+        $('ledger').append(detail);
+      }
+    }
+    async function request(action) {
+      $('error').textContent = '';
+      try {
+        const r = await fetch(
+          action ? '/api/action' : '/api/state',
+          action
+            ? {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(action),
+              }
+            : {},
+        );
+        if (!r.ok) throw Error('Rehearsal request failed');
+        render(await r.json());
+      } catch (e) {
+        $('error').textContent = e.message;
+      }
+    }
+    $('load').onclick = () => request({ action: 'scenario', scenario: $('scenario').value });
+    $('refresh').onclick = () => request();
+    $('stop').onclick = () => request({ action: 'stop' });
+    $('expect').onclick = () => request({ action: 'expect' });
+    $('cancel').onclick = () => request({ action: 'cancel' });
+    $('save').onclick = async () => {
+      await request({ action: 'note', note: $('note').value });
+      $('saved').textContent = ' Saved';
+    };
+    $('filter').onchange = draw;
+    $('speak').onclick = () => {
+      if (!('speechSynthesis' in window)) {
+        $('error').textContent = 'Browser speech unavailable';
+        return;
+      }
+      speechSynthesis.cancel();
+      speechSynthesis.speak(
+        new SpeechSynthesisUtterance('Synthetic rehearsal, not live. ' + state.report.text),
+      );
+    };
+    request();
+  </script>
+</html>

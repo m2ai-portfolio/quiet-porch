@@ -38,8 +38,10 @@
       "clips": {
         "bark": "bark-5s",
         "wildlife": "wildlife"
-      }
-    }
+      },
+      "audioMode": "bark"
+    },
+    "primaryAccountId": "acct-synthetic"
   },
   "allowlist": {
     "entities": [
@@ -625,11 +627,11 @@
     }
   ],
   "expected_ledger": [
-    "23:00:00 · nothing · front yard · L0 · evidence age 5.4 s · source replay · dry run · silent: nothing to act on",
-    "23:01:00 · cat · front yard · L0 · evidence age 5.4 s · source replay · dry run · silent: nothing to act on",
-    "23:02:00 · person · front yard · L4 (valve) · evidence age 6.6 s · source replay · dry run · stopped: next frame empty 23:03:25",
-    "          L1 at 0 s, age 6.6 s · L2 at 20 s, age 6.6 s · L3 at 40 s, age 6.6 s · L4 at 60 s, age 6.6 s",
-    "23:20:00 · armadillo · front yard · wildlife run · evidence age 6.6 s · source replay · dry run · stopped: run finished 23:20:46",
-    "23:25:00 · nothing · front yard · L0 · evidence age 5.4 s · source replay · dry run · silent: nothing to act on"
+    "23:00:00 \u00b7 nothing \u00b7 front yard \u00b7 L0 \u00b7 evidence age 5.4 s \u00b7 source replay \u00b7 dry run \u00b7 silent: nothing to act on",
+    "23:01:00 \u00b7 cat \u00b7 front yard \u00b7 L0 \u00b7 evidence age 5.4 s \u00b7 source replay \u00b7 dry run \u00b7 silent: nothing to act on",
+    "23:02:00 \u00b7 person \u00b7 front yard \u00b7 L4 (valve) \u00b7 evidence age 6.6 s \u00b7 source replay \u00b7 dry run \u00b7 stopped: two accepted frames empty 23:03:25",
+    "          L1 at 0 s, age 6.6 s \u00b7 L2 at 10 s, age 6.6 s \u00b7 L3 at 20 s, age 6.6 s \u00b7 L4 at 40 s, age 6.6 s",
+    "23:20:00 \u00b7 armadillo \u00b7 front yard \u00b7 wildlife run \u00b7 evidence age 6.6 s \u00b7 source replay \u00b7 dry run \u00b7 stopped: run finished 23:20:46",
+    "23:25:00 \u00b7 nothing \u00b7 front yard \u00b7 L0 \u00b7 evidence age 5.4 s \u00b7 source replay \u00b7 dry run \u00b7 silent: nothing to act on"
   ]
 }

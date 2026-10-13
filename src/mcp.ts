@@ -76,6 +76,11 @@ export interface StatusDeps {
   isExterior?: (entityId: string) => boolean;
   // Where the frames came from; a replay or sandbox ledger is labelled so on every line.
   source?: LedgerSource;
+  readOnlyHousehold?: boolean;
+  accountId?: string;
+  accountScope?: () => string | undefined;
+  deviceIds?: string[];
+  ingestionHealth?: () => { status: string; detail: string };
   sourceLabel?: string; // e.g. "replay of 2026-10-12", burned into the ledger page header
   allowedOrigins: string[];
   log: (msg: string) => void;
@@ -185,7 +190,7 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
       )
       .all() as { id: number; entity_id: string; reason: string; created_at: number }[];
 
-  return [
+  const tools: Tool[] = [
     {
       name: 'get_incident_status',
       title: 'Is everything okay?',
@@ -346,12 +351,18 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
           deps.night.end,
           deps.night.timezone,
         );
-        const ledger = buildLedger(db, span, { source: deps.source });
+        const ledger = buildLedger(db, span, {
+          source: deps.source,
+          accountId:
+            deps.accountId ?? (deps.accountScope ? (deps.accountScope() ?? 'unbound') : undefined),
+          deviceIds: deps.deviceIds,
+        });
         const report = nightReport(ledger, span, {
           ...deps.night,
           dryRun: deps.dryRun,
           isExterior: deps.isExterior,
           source: deps.source,
+          ingestionHealth: deps.ingestionHealth?.(),
         });
         return {
           text: report.text,
@@ -380,16 +391,25 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
           deps.night.end,
           deps.night.timezone,
         );
-        const ledger = buildLedger(db, span, { source: deps.source });
+        const ledger = buildLedger(db, span, {
+          source: deps.source,
+          accountId:
+            deps.accountId ?? (deps.accountScope ? (deps.accountScope() ?? 'unbound') : undefined),
+          deviceIds: deps.deviceIds,
+        });
         const c = ledger.counts;
         return {
-          text: `${c.events} events, ${c.silent} silent, ${c.handled} handled.`,
+          text: `${c.events} events, ${c.silent} known no-action, ${c.handled} handled, ${c.unknown} outcomes unknown.`,
           data: {
             window: { from: span.from, to: span.to, in_progress: span.inProgress },
             timezone: deps.night.timezone,
             source: deps.source ?? 'clip',
             source_label: deps.sourceLabel ?? null,
             dry_run: deps.dryRun,
+            ingestion_health: deps.ingestionHealth?.() ?? {
+              status: 'unknown',
+              detail: 'Delivery coverage unverified',
+            },
             counts: c,
             lines: ledger.lines,
             text_lines: formatLedger(ledger.lines, deps.night.timezone),
@@ -455,6 +475,11 @@ export function createStatusTools(deps: StatusDeps): Tool[] {
       },
     },
   ];
+  if (deps.readOnlyHousehold && !deps.accountId)
+    throw new Error('ledger-only surface requires an account scope');
+  return tools.filter(
+    (t) => !deps.readOnlyHousehold || ['get_ledger', 'get_night_report'].includes(t.name),
+  );
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -489,7 +514,11 @@ const rpcError = (id: unknown, code: number, message: string) => ({
 });
 
 export function createStatusMcp(deps: StatusDeps) {
-  const tools = createStatusTools(deps);
+  if (deps.readOnlyHousehold && !deps.accountId)
+    throw new Error('ledger-only surface requires an account scope');
+  const tools = createStatusTools(deps).filter(
+    (t) => !deps.readOnlyHousehold || ['get_ledger', 'get_night_report'].includes(t.name),
+  );
   const byName = new Map(tools.map((t) => [t.name, t]));
 
   async function handleRpc(msg: Record<string, unknown>, role: Role): Promise<unknown> {

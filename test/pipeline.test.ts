@@ -38,6 +38,7 @@ const frame: ImageAttempt = {
 
 const cfg: PipelineConfig = parsePipelineConfig({
   dryRun: true,
+  primaryAccountId: 'acct',
   timezone: 'America/Chicago',
   nightWindow: { start: '20:00', end: '06:30' },
   zones: { 'cam-yard': 'front_yard' },
@@ -90,6 +91,7 @@ describe('decision pipeline (dry run)', () => {
   function make(
     model: ReturnType<typeof fakeModel>,
     opts: {
+      liveFrame?: () => Promise<import('../src/frames.ts').EventFrame | undefined>;
       killed?: boolean;
       download?: () => Promise<ImageAttempt>;
       onEvaluation?: (e: Evaluation) => void;
@@ -98,6 +100,7 @@ describe('decision pipeline (dry run)', () => {
   ) {
     return createPipeline(opts.config ?? cfg, {
       db,
+      liveFrame: opts.liveFrame,
       download: opts.download ?? (async () => frame),
       converse: model,
       killed: () => opts.killed ?? false,
@@ -109,6 +112,20 @@ describe('decision pipeline (dry run)', () => {
     });
   }
 
+  it('a live-source failure falls back to the clip without inventing live provenance', async () => {
+    const download = vi.fn(async () => frame);
+    const result = await make(fakeModel([], 'benign'), {
+      download,
+      liveFrame: async () => {
+        throw Error('stream offline');
+      },
+    }).handle(ev(), {});
+    expect(download).toHaveBeenCalledOnce();
+    expect(result?.kind).toBe('log');
+    expect(db.prepare('SELECT source FROM evidence').get()).toMatchObject({
+      source: 'ring:cam-yard',
+    });
+  });
   it('hands every decision to the coordinator with its evidence id, capture time and frame', async () => {
     const seen: Evaluation[] = [];
     const model = fakeModel([{ class: 'armadillo', confidence: 0.93 }], 'nuisance');

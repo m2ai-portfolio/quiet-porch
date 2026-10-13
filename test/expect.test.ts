@@ -18,6 +18,7 @@ const actuatorCfg: ActuatorConfig = {
     },
   },
   clips: { bark: 'bark-5s', wildlife: 'wildlife' },
+  audioMode: 'bark',
 };
 const T0 = 1_791_400_000_000;
 
@@ -133,7 +134,7 @@ describe('expect_me, "I\'m stepping out"', () => {
     expect(off.n).toBeGreaterThan(0);
   });
 
-  it('does not touch the wildlife profile', async () => {
+  it('holds new wildlife actions during an owner window and resumes after cancellation', async () => {
     const s = setup();
     s.coord.expectMe('Lutfiya', 10, 'mcp:owner');
     await s.coord.onEvaluation({
@@ -145,6 +146,15 @@ describe('expect_me, "I\'m stepping out"', () => {
       evidenceId: 'evw',
       captureTs: s.clock.now() - 1000,
     });
+    await s.coord.idle();
+    expect(activeIncident(s.db)).toBeUndefined();
+    expect(s.outcomes().at(-1)).toMatchObject({
+      outcome: 'not_opened',
+      note: 'expected_window_active',
+    });
+    s.coord.cancelExpectation('mcp:owner');
+    await s.clock.advance(1000);
+    await s.coord.onEvaluation({ ...wildlife(s), sourceEventId: 'w2', evidenceId: 'evw2' });
     await s.coord.idle();
     expect(activeIncident(s.db)?.profile).toBe('wildlife');
   });
@@ -246,7 +256,7 @@ describe('expect_me corner cases found in review', () => {
     expect(s.outcomes().at(-1)).toMatchObject({ outcome: 'not_opened', note: 'wildlife_cooldown' });
   });
 
-  it('the pre-window grace never ends a ladder that was already running (round 2)', async () => {
+  it('opening a window immediately closes an active ladder even before a fresh evaluation', async () => {
     const s = setup();
     await s.coord.onEvaluation(s.person()); // the ladder opens at L1
     await s.coord.idle();
@@ -255,7 +265,9 @@ describe('expect_me corner cases found in review', () => {
     // a frame captured 4 s BEFORE the window opened: inside the 10 s grace, but a ladder runs
     await s.coord.onEvaluation({ ...s.person(), captureTs: s.clock.now() - 4000 });
     await s.coord.idle();
-    expect(activeIncident(s.db)).toBeDefined();
-    expect(s.outcomes().at(-1)).toMatchObject({ outcome: 'incident' });
+    expect(activeIncident(s.db)).toBeUndefined();
+    expect(s.db.prepare('SELECT exit_reason FROM incidents WHERE id=1').get()).toMatchObject({
+      exit_reason: 'expected:Lutfiya',
+    });
   });
 });

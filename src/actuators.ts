@@ -5,9 +5,12 @@
 //   - live: HA REST, pi_audio over ssh, and Telegram. createActuators refuses to build them
 //     while the pipeline config is a dry run, and parsePipelineConfig refuses anything else.
 import { execFile } from 'node:child_process';
+import type { createSpeechOutput } from './speech.ts';
 import { domainOf } from './allowlist.ts';
 
-export type CallResult = { ok: true; contextId?: string } | { ok: false; error: string };
+export type CallResult =
+  | { ok: true; contextId?: string; spokenText?: string; fallback?: boolean; latencyMs?: number }
+  | { ok: false; error: string };
 
 export interface Actuator {
   call(req: {
@@ -90,6 +93,7 @@ export function createDryRunActuators(log: DryRunLog, clock: { now(): number } =
           valveOpenedAt.delete(entity_id);
           state.set(entity_id, 'closed');
           break;
+        case 'speak':
         case 'play_clip':
           state.set(entity_id, 'playing');
           break;
@@ -189,6 +193,7 @@ export const CLIP_RE = /^[a-z0-9-]{1,32}$/;
 
 export function createPiAudioActuator(opts: {
   host: string;
+  speech?: ReturnType<typeof createSpeechOutput>;
   exec?: ExecFn;
   deadlineMs?: number;
 }): Actuator {
@@ -199,6 +204,15 @@ export function createPiAudioActuator(opts: {
   return {
     async call({ intentId, service, data, dispatchEpochMs }) {
       try {
+        if (service === 'speak') {
+          if (!opts.speech) return { ok: false, error: 'speech_not_configured' };
+          return opts.speech.speak(
+            String(data?.spoken_text ?? ''),
+            data?.owner_notified === true,
+            intentId,
+            dispatchEpochMs,
+          );
+        }
         if (service === 'play_clip') {
           const clip = String(data?.clip ?? '');
           // The allowlist enum already pinned the clip; this keeps the ssh argv inert anyway.
@@ -272,6 +286,7 @@ export interface LiveSettings {
   haUrl: string;
   haToken: string;
   piHost: string;
+  speech?: ReturnType<typeof createSpeechOutput>;
   telegramToken: string;
   telegramChatId: string;
 }
@@ -288,8 +303,30 @@ export function createActuators(
   const s = live();
   return {
     ha: createHaActuator({ baseUrl: s.haUrl, token: s.haToken }),
-    audio: createPiAudioActuator({ host: s.piHost }),
+    audio: createPiAudioActuator({ host: s.piHost, speech: s.speech }),
     notifier: createTelegramNotifier({ token: s.telegramToken, chatId: s.telegramChatId }),
     live: true,
+  };
+}
+
+// Transfer finite, validated audio only. Calling this requires authorized Pi playback.
+export function createPiSpeechPlayer(host: string, exec: ExecFn = realExec) {
+  if (!/^[a-zA-Z0-9_.@-]+$/.test(host)) throw new Error('invalid_pi_host');
+  return async (path: string, id: string, epoch: number) => {
+    const name = path.split('/').at(-1)!;
+    if (!/^speech-[a-f0-9]{64}\.wav$/.test(name) || !/^[A-Za-z0-9-]{1,64}$/.test(id))
+      throw new Error('bad_audio_argument');
+    await exec(
+      'scp',
+      ['-q', '-o', 'BatchMode=yes', path, `${host}:quiet-porch/clips/${name}`],
+      2000,
+    );
+    if (Date.now() - epoch >= 3000) throw new Error('speech_expired');
+    const result = await exec(
+      'ssh',
+      ['-o', 'BatchMode=yes', host, 'qp-speak', id, String(epoch), name.slice(0, -4)],
+      2000,
+    );
+    if (!result.trim().startsWith('started')) throw new Error('pi_playback_refused');
   };
 }

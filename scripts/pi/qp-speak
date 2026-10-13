@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# qp-speak <intent_id> <dispatch_epoch_ms> <clip>   (plan v7 section 8, pi_audio adapter)
+# Starts one finite clip as a transient user unit and returns at once. Everything runs under
+# the audio lock, so qp-stop either sees and stops this unit or runs first and we refuse.
+# Both epochs come from ProBook's clock, so Pi clock skew cannot reorder them.
+set -euo pipefail
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/quiet-porch"
+CLIPS="${QP_CLIP_DIR:-$HOME/quiet-porch/clips}"
+VOLUME_CAP="${QP_VOLUME_CAP:-0.60}"
+intent="${1:-}" epoch="${2:-}" clip="${3:-}"
+[[ $intent =~ ^[A-Za-z0-9-]{1,64}$ ]] || { echo "bad_intent"; exit 2; }
+[[ $epoch =~ ^[0-9]{10,16}$ ]] || { echo "bad_epoch"; exit 2; }
+[[ $clip =~ ^speech-[a-f0-9]{64}$ ]] || { echo "bad_clip"; exit 2; }
+file="$CLIPS/$clip.wav"
+[[ -f $file ]] || { echo "no_clip"; exit 3; }
+mkdir -p "$STATE"
+exec 9>"$STATE/audio.lock"
+flock 9
+stop_epoch="$(cat "$STATE/audio-stop-epoch" 2>/dev/null || echo 0)"
+if (( stop_epoch >= epoch )); then echo "refused_stop_epoch"; exit 0; fi
+current="$(wpctl get-volume @DEFAULT_AUDIO_SINK@ | awk '{print $2}')"
+if awk -v c="$current" -v m="$VOLUME_CAP" 'BEGIN { exit !(c > m) }'; then
+  wpctl set-volume @DEFAULT_AUDIO_SINK@ "$VOLUME_CAP"
+fi
+# RuntimeMaxSec ends the clip on the Pi itself even if ssh or ProBook dies mid-clip.
+systemd-run --user --collect --unit="qp-audio-$intent" -p RuntimeMaxSec=4 pw-play "$file" >/dev/null
+echo "started qp-audio-$intent"

@@ -34,6 +34,7 @@ const actuatorCfg: ActuatorConfig = {
     },
   },
   clips: { bark: 'bark-5s', wildlife: 'wildlife' },
+  audioMode: 'bark',
 };
 
 const T0 = 1_791_400_000_000;
@@ -283,7 +284,9 @@ describe('coordinator: stand-down, cleanup, reconcile', () => {
     await flush();
     await t.clock.advance(3000);
     await t.settle();
-    expect(t.intents()).toMatchObject([{ entity_id: 'light.stairs', status: 'unknown' }]);
+    expect(t.intents().filter((i) => i.service !== 'notify')).toMatchObject([
+      { entity_id: 'light.stairs', status: 'unknown' },
+    ]);
     const row = t.db.prepare('SELECT entity_id, ha_context_id, reason FROM reconcile').get();
     expect(row).toEqual({ entity_id: 'light.stairs', ha_context_id: null, reason: 'call_timeout' });
   });
@@ -481,6 +484,7 @@ describe('coordinator: wildlife profile', () => {
   it('wildlife during an open intruder incident is logged only', async () => {
     const t = setup();
     await t.coord.onEvaluation(t.ev('intruder', 'person_unknown'));
+    await t.settle();
     await t.coord.onEvaluation(t.ev('wildlife', 'nuisance_at_night', armadillo));
     await t.settle();
     expect(t.calls()).toEqual(['turn_on light.stairs']);

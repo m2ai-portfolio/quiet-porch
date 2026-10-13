@@ -1,3 +1,4 @@
+import { approvedSpeech } from './voice.ts';
 // Actuator allowlist (plan v6 items 5 and 7). Every Home Assistant call the coordinator makes is
 // checked here first. Rules that must not depend on config are fixed in code:
 //   - lock, cover (garage doors live here) and alarm_control_panel are rejected at load and check;
@@ -12,7 +13,8 @@ import { readFileSync } from 'node:fs';
 export type Placement = 'exterior' | 'interior';
 export type CommandClass = 'safety' | 'escalation';
 
-export type ParamRule = { min: number; max: number } | { enum: (string | number | boolean)[] };
+export type ParamRule =
+  { maxLength: number } | { min: number; max: number } | { enum: (string | number | boolean)[] };
 
 export interface EntityRule {
   entity_id: string;
@@ -28,6 +30,7 @@ export interface Allowlist {
 }
 
 export interface ActionRequest {
+  zone?: string; // required for exterior escalation, never for safety cleanup
   entity_id: string;
   service: string;
   data?: Record<string, unknown>;
@@ -123,7 +126,13 @@ function validateRule(raw: unknown, index: number): EntityRule {
     for (const [p, rule] of Object.entries(r.services[s]?.params ?? {})) {
       const okRange = 'min' in rule && 'max' in rule && rule.min <= rule.max;
       const okEnum = 'enum' in rule && Array.isArray(rule.enum) && rule.enum.length > 0;
-      if (!okRange && !okEnum) throw new Error(`${at}: ${s}.${p} needs {min,max} or {enum}`);
+      const okText =
+        'maxLength' in rule &&
+        Number.isInteger(rule.maxLength) &&
+        rule.maxLength > 0 &&
+        rule.maxLength <= 240;
+      if (!okRange && !okEnum && !okText)
+        throw new Error(`${at}: ${s}.${p} needs {min,max} or {enum}`);
     }
   }
   return r as EntityRule;
@@ -164,6 +173,13 @@ export function checkAction(allowlist: Allowlist, req: ActionRequest): ActionChe
   if (isInteriorAudio(rule, req.service)) {
     return { ok: false, reason: `${req.service} denied on interior media player` };
   }
+  if (
+    classOf(req.service) === 'escalation' &&
+    rule.placement === 'exterior' &&
+    (!req.zone || !rule.zones.includes(req.zone))
+  ) {
+    return { ok: false, reason: `${req.entity_id}: incident zone not allowed` };
+  }
   const svc = rule.services[req.service];
   if (!svc) return { ok: false, reason: `${req.entity_id}: service ${req.service} not allowed` };
   const params = svc.params ?? {};
@@ -174,6 +190,9 @@ export function checkAction(allowlist: Allowlist, req: ActionRequest): ActionChe
       if (!pr.enum.includes(value as string | number | boolean)) {
         return { ok: false, reason: `${req.service}: ${key}=${String(value)} not in enum` };
       }
+    } else if ('maxLength' in pr) {
+      if (typeof value !== 'string' || value.length > pr.maxLength)
+        return { ok: false, reason: 'invalid bounded text' };
     } else if (typeof value !== 'number' || !Number.isFinite(value)) {
       return { ok: false, reason: `${req.service}: ${key} must be a number` };
     } else if (value < pr.min || value > pr.max) {
@@ -183,5 +202,10 @@ export function checkAction(allowlist: Allowlist, req: ActionRequest): ActionChe
       };
     }
   }
+  if (
+    req.service === 'speak' &&
+    !approvedSpeech(req.data?.spoken_text as string, req.data?.owner_notified === true)
+  )
+    return { ok: false, reason: 'speech outside approved template' };
   return { ok: true, cls: classOf(req.service) };
 }

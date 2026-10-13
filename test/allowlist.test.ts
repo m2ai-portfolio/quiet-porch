@@ -60,6 +60,7 @@ describe('checkAction', () => {
     expect(
       checkAction(example, {
         entity_id: 'light.front_spotlight',
+        zone: 'front',
         service: 'turn_on',
         data: { brightness_pct: 80 },
       }),
@@ -153,6 +154,7 @@ describe('bounded setters and pi_audio (plan v7 section 8)', () => {
       entity_id: 'number.front_yard_sprinkler_irrigation_duration',
       service: 'set_value',
       data: { value },
+      zone: 'front_yard',
     });
     expect(checkAction(a, req(30))).toEqual({ ok: true, cls: 'escalation' });
     expect(checkAction(a, req(31)).ok).toBe(false);
@@ -163,6 +165,7 @@ describe('bounded setters and pi_audio (plan v7 section 8)', () => {
     const play = (clip: string) =>
       checkAction(shipped, {
         entity_id: 'pi_audio.porch_speaker',
+        zone: 'front_yard',
         service: 'play_clip',
         data: { clip },
       });

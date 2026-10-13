@@ -1,0 +1,51 @@
+{
+  "classification": "synthetic, not a real night",
+  "assets": [
+    {
+      "file": "thumbnail.svg",
+      "role": "thumbnail 3:2",
+      "provenance": "original generated text artwork, no household source"
+    },
+    {
+      "file": "gallery-ledger.svg",
+      "role": "gallery",
+      "provenance": "original generated text artwork, no household source"
+    },
+    {
+      "file": "gallery-boundaries.svg",
+      "role": "gallery",
+      "provenance": "original generated text artwork, no household source"
+    },
+    {
+      "file": "wildlife-synthetic.mp4",
+      "role": "10-second wildlife fixture decision caption sequence",
+      "provenance": "procedural text frames; burned synthetic label; no real footage"
+    },
+    {
+      "file": "rehearsal-cut.mp4",
+      "role": "175-second English caption rehearsal outline, not final device demonstration",
+      "provenance": "procedural text frames; burned synthetic label; no real footage"
+    },
+    {
+      "file": "rehearsal.srt",
+      "role": "English captions / preproduction script",
+      "provenance": "original evidence-safe copy"
+    }
+  ],
+  "fixture": "test/fixtures/synthetic-speech-night.json",
+  "counts": {
+    "raw_webhooks": 13,
+    "ledger_lines": 5,
+    "known_no_action": 3,
+    "handled_simulations": 2
+  },
+  "missing": [
+    "real Ring device/simulator demonstration",
+    "authorized real-night/staged-loiterer footage",
+    "actual speaker output",
+    "real second-household footage",
+    "team on-camera narration",
+    "manager watermark guidance"
+  ],
+  "publication": "not authorized"
+}

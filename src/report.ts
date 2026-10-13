@@ -50,7 +50,7 @@ function didClauses(l: LedgerLine, isExterior?: (entityId: string) => boolean): 
     // entity (an interior light also uses turn_on).
     const ok = e.done.some(
       (d) =>
-        d.service === LEVEL_SERVICE[e.level] &&
+        (d.service === LEVEL_SERVICE[e.level] || (e.level === 3 && d.service === 'speak')) &&
         (e.level !== 2 || !isExterior || isExterior(d.entity_id)),
     );
     // An incident still running may simply not have reached this step yet: say nothing.
@@ -78,7 +78,8 @@ function endClause(l: LedgerLine, tz: string): string {
   const at = time ? ` at ${time}` : '';
   const r = l.stop_reason;
   if (r === 'still active') return 'It is still going';
-  if (r === 'next frame empty') return time ? `The person was gone by ${time}` : 'The person left';
+  if (r === 'two accepted frames empty')
+    return time ? `The person was gone by ${time}` : 'The person left';
   if (r.startsWith('stood down')) return `You stood it down${at}`;
   if (r.startsWith('expected')) {
     return l.profile === 'wildlife'
@@ -127,6 +128,7 @@ export function nightReport(
     dryRun: boolean;
     isExterior?: (entityId: string) => boolean;
     source?: LedgerSource;
+    ingestionHealth?: { status: string; detail: string };
   },
 ): NightReport {
   const { counts, lines } = ledger;
@@ -138,7 +140,7 @@ export function nightReport(
   const parts: string[] = [];
   if (counts.events === 0) {
     parts.push(
-      `No events. Silent all night, ${spokenClock(opts.start)} to ${spokenClock(opts.end)}.`,
+      `No recorded events, ${spokenClock(opts.start)} to ${spokenClock(opts.end)}. Delivery coverage is unverified; this does not prove a quiet night.`,
     );
   } else {
     parts.push(`${cap(numberWord(counts.events))} ${counts.events === 1 ? 'event' : 'events'}.`);
@@ -155,6 +157,8 @@ export function nightReport(
       });
       parts.push(`${cap(numberWord(counts.handled))} handled: ${sentences.join(' ')}`);
     }
+    if (counts.unknown > 0)
+      parts.push(`${cap(numberWord(counts.unknown))} outcomes unknown, not counted as silent.`);
     if (counts.expected > 0) {
       parts.push(`${cap(numberWord(counts.expected))} expected, so it stayed quiet.`);
     }
@@ -169,6 +173,7 @@ export function nightReport(
       );
     }
   }
+  if (opts.ingestionHealth) parts.push(`Ingestion: ${opts.ingestionHealth.detail}.`);
   if (opts.dryRun) {
     parts.push('Quiet Porch is in dry run, so nothing was actually switched.');
   } else if (counts.handled > 0 && opts.isExterior) {

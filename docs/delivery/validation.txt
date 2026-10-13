@@ -1,0 +1,16 @@
+Quiet Porch local validation — October 12, 2026 America/Chicago
+
+Baseline refreshed main 487af6468c6672b7d20f0190c48c8b488e569fba: 269 tests, 20 files; typecheck/lint passed.
+Final: npm test — 291 passed, 22 files, 3.19 seconds (21:25:54 Chicago).
+npm run typecheck — passed.
+npm run lint — passed.
+npm run build — passed (tsc --noEmit; native Node TypeScript application).
+Speech fixture: node scripts/replay.ts test/fixtures/synthetic-speech-night.json --times 3 — matched expected ledger across 3 runs.
+Explicit legacy bark fixture: 3 replay runs matched after selected timing update.
+git diff --check — passed.
+bash -n scripts/pi/qp-speak scripts/rehearsal-service — passed.
+ffprobe wildlife-synthetic.mp4 — 10.000 seconds; rehearsal-cut.mp4 — 175.000 seconds.
+Production npm audit --omit=dev — 0 vulnerabilities.
+LAN HTTP GET verified; simulated controls and restart persistence tested through HTTP.
+No connected browser surface: rendering, mobile and browser speech unverified.
+No Ring/Bedrock/Polly/HA/SSH hardware traffic, private footage inspection, account linking or production deployment.

@@ -1,3 +1,5 @@
+import { ingestionHealth } from './ingestion-health.ts';
+import { primaryHousehold } from './household.ts';
 // Quiet Porch Ring endpoints, served on 127.0.0.1 and exposed through Tailscale Funnel at /ring.
 //
 // One-way account linking (Ring docs, section 6):
@@ -489,6 +491,8 @@ export function createApp(cfg: Config) {
           mode: modeStore,
           killed: () => existsSync(join(cfg.stateDir, 'KILL')),
           dryRun: cfg.pipeline!.config.dryRun,
+          accountScope: () => cfg.pipeline!.config.primaryAccountId ?? primaryHousehold(db!),
+          ingestionHealth: () => ingestionHealth(db!, Date.now(), primaryHousehold(db!)),
           standDown: (id, by) => coordinator!.standDown(id, by),
           clearReconcile: (row, user) => coordinator!.clearReconcile(row, user),
           expectMe: (label, minutes, by) => coordinator!.expectMe(label, minutes, by),

@@ -4,7 +4,7 @@ An AI home deterrent for the Amazon Developer Hackathon (Build, Ship, Shape, 202
 Alexa+ tracks, with Amazon Bedrock for the AWS Builder mini-challenge.
 
 A Ring motion event becomes a judged, logged decision. A person who is still there at night
-gets a calm, escalating response (interior lights, then exterior light, a short bark clip, a
+gets a calm, escalating response (interior lights, then exterior light, a descriptive spoken line, a
 sprinkler), and an armadillo in the yard gets the sprinkler. Benign events (deliveries, cars,
 pets) get no action at all. Every decision is logged with its frame and timestamps, and an
 owner can stand everything down from a signed Stop link or by asking Alexa.
@@ -26,7 +26,7 @@ pipeline.ts
    |
    v
 coordinator.ts  -- one active incident, write-ahead intents, cooldowns, cleanup, reconcile
-   ladder.ts      L1 interior lights + notify, L2 exterior light, L3 bark clip, L4 sprinkler
+   ladder.ts      L1 interior lights + notify, L2 exterior light, L3 descriptive speech, L4 sprinkler
    allowlist.ts   every Home Assistant call checked; locks, covers and alarms are never allowed
    actuators.ts   Home Assistant REST, Pi speaker, Telegram (or a dry-run simulator)
    |
@@ -85,19 +85,17 @@ What exists today is stated as such, and what does not exist yet is listed after
   uses no faces. _Not yet:_ a second connected household shown next to the first.
 - **Quality of the Idea.** A deterrent judged by its silence: deterministic code escalates only on
   fresh evidence and the model never acts. The line the porch speaks comes from a fixed template
-  and a closed vocabulary (`src/voice.ts`). _Not yet:_ spoken playback (the composer exists behind a
-  stub).
+  and a closed vocabulary (`src/voice.ts`). _Software only:_ filtered composition, Polly cache/fallback and finite Pi adapter now exist; real synthesis/playback and latency remain unverified.
 
 ## The night ledger
 
 Silence is the product, and the ledger proves it. Every motion event of the armed night is one
 line with the Ring capture time, what the camera saw, the level reached, the age of the frame the
 level was earned on, the frame source (`clip` today, `replay` for a fixture; `live` and `sandbox` are reserved for live view and the Playground) and why it stopped. A
-lingering person is one line for the whole incident, with the age at every level, so "14 events,
-13 silent, 1 handled" is arithmetic: events = silent + handled.
+lingering person is one line for the whole incident, with the age at every level, with known no-action, handled and unknown counts. Missing historical actionable outcomes are unknown, so events = known no-action + handled + unknown. Counts shown in the rehearsal are fixture-derived, not a real-night claim.
 
 ```
-02:14:07 · person · side gate · L3 (clip) · evidence age 4 s · source clip · stopped: next frame empty 02:14:31
+02:14:07 · person · side gate · L3 (clip) · evidence age 4 s · source clip · stopped: two accepted frames empty 02:14:31
 ```
 
 - **Morning report.** `get_night_report` (status-mcp, read token) answers "what happened last
@@ -121,9 +119,7 @@ lingering person is one line for the whole incident, with the age at every level
   `test/fixtures/synthetic-night.json` is a hand-built night, labelled synthetic.
   `node scripts/export-fixture.ts` turns a real night from the state directory into a fixture
   outside the repository and prints how the replay differs from the original.
-- **Spoken line (proposal, not wired).** `src/voice.ts` composes one line from a fixed template
-  and a closed vocabulary. Nothing plays it; the ladder still plays its bark clip. Whether L3
-  speaks is a team decision.
+- **Spoken line (selected; dry run).** Matt selected speech with L2/L3/L4 at 10/20/40 seconds. `src/voice.ts` composes a fixed, closed-vocabulary line. `src/speech.ts` adds finite Polly PCM/WAV synthesis, cached fallback and failure reporting; `qp-speak` is the Pi integration helper. These adapters are not installed or enabled on hardware by this work. The normal service remains dry run. Legacy fixtures retain explicit bark mode.
 
 Events that were judged actionable but held back (kill switch, cooldown, old evidence) show as
 `held`, never as silent; a camera Ring encrypts shows as `blind`. The morning report never claims
@@ -135,3 +131,27 @@ Measured frictions with the Ring API, Bedrock and MCP are in
 ## License
 
 MIT
+
+## Isolated evidence rehearsal
+
+`npm run demo -- --host 0.0.0.0 --port 3472` serves a synthetic-only app with ledger details,
+report, simulated Stop and expected-window controls, and durable notes. Open
+http://10.0.0.46:3472 on ProBook's LAN (recheck the address after network changes).
+No external service or physical device calls occur in this app. Sources and generated assets
+live in this repo; preferences/exports persist under `state/rehearsal`.
+
+See [coverage report](docs/delivery/coverage.html), [runbook](docs/delivery/runbook.md),
+[submission draft](docs/delivery/submission.html), and [live-view spike limits](docs/delivery/live-view-spike.md).
+The normal server still rejects non-dry-run config; the old service/checkout was preserved.
+
+New configured household access requires an explicit `primaryAccountId` in pipeline config.
+Without it, all households are ledger-only; arrival order does not grant actuator authority.
+Secondary surfaces require `accountId` plus `readOnlyHousehold: true` and expose only scoped
+ledger/report tools. No second account was linked by this work. Exterior escalation must match
+the incident zone; Stop/close cleanup remains available after context loss.
+
+Live-source signing/session/provenance boundaries are tested, but a real WHEP/RTSPS decoder
+and trusted absolute capture-time mapping remain open. Locally received stream frames are
+not accepted as timestamp proof. Cam1 is battery powered; session limit is 30 seconds.
+Physical zone A is Matt's selected sprinkler deterrent; exact entity mapping and self-shutoff
+are unverified. Two-empty-frame departure and multiple-notification policy remain in place.
