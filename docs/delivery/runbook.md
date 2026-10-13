@@ -61,6 +61,10 @@ retain explicit `audioMode: bark`; the new speech fixture exercises the selected
    caches WAV files. `createPiSpeechPlayer` transfers a hashed file and calls `qp-speak`.
    Remote directory `~/quiet-porch/clips` and Pi helpers must already be installed through a
    separately authorized setup. The normal server remains locked to dry run.
+   After the helpers, run `scripts/pi/qp-speaker-setup <speaker_mac>` on the Pi once per
+   speaker (QP-15). Without it the Anker loses the start of every clip: PipeWire suspends the
+   idle Bluetooth sink (~7 s to resume) and the speaker mutes its amp on silence (~2 s to wake).
+   It installs a WirePlumber rule and an inaudible 20 Hz keep-alive unit; Stop does not touch it.
 5. Speech output accepts at most four seconds; if synthesized audio exceeds that, shorten the
    approved text/slots rather than truncating words. Real trigger-to-audio <3s is unmeasured.
 6. Test duration readback, 30-second valve self-shutoff, Stop, expected-window cleanup,

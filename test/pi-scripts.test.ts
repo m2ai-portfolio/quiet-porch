@@ -133,3 +133,47 @@ describe('qp-speak and the volume ceiling', () => {
     expect(run('qp-speak', 'sp-3', '1791400000000', 'bark-5s')).toBe('bad_clip');
   });
 });
+
+describe('qp-speaker-setup', () => {
+  // A made-up address: the real speaker's stays out of the public repo.
+  const MAC = 'AA:BB:CC:DD:EE:0F';
+  const cfg = () => join(home, '.config');
+  it('renders both files for one speaker, writes a seamless -40 dBFS tone and enables the unit', () => {
+    expect(run('qp-speaker-setup', MAC)).toBe('installed');
+    const conf = readFileSync(
+      join(cfg(), 'wireplumber/wireplumber.conf.d/51-quiet-porch-anker-nosuspend.conf'),
+      'utf8',
+    );
+    expect(conf).toContain('device.name = "bluez_card.AA_BB_CC_DD_EE_0F"');
+    expect(conf).toContain('node.name = "bluez_output.AA_BB_CC_DD_EE_0F.1"');
+    expect(conf).toContain('session.suspend-timeout-seconds = 0, node.pause-on-idle = false');
+    const unit = readFileSync(join(cfg(), 'systemd/user/qp-keepalive.service'), 'utf8');
+    expect(unit).toContain('pw-play --target=bluez_output.AA:BB:CC:DD:EE:0F ');
+    expect(conf + unit).not.toContain('@');
+    // qp-stop stops qp-audio-* only, so Stop can never silence the keep-alive.
+    expect(readFileSync(join(SCRIPTS, 'qp-stop'), 'utf8')).toContain("'qp-audio-*'");
+
+    const wav = readFileSync(join(home, 'quiet-porch/keepalive/keepalive-20hz.wav'));
+    expect([wav.readUInt16LE(22), wav.readUInt32LE(24), wav.readUInt16LE(34)]).toEqual([
+      2, 48000, 16,
+    ]);
+    const pcm = wav.subarray(44);
+    expect(pcm.length).toBe(60 * 48000 * 4);
+    let peak = 0;
+    for (let i = 0; i < pcm.length; i += 2) peak = Math.max(peak, Math.abs(pcm.readInt16LE(i)));
+    expect(20 * Math.log10(peak / 32767)).toBeCloseTo(-40, 1);
+    expect(pcm.readInt16LE(0)).toBe(0); // starts and ends a period at zero: no click on loop
+
+    expect(readFileSync(calls, 'utf8').trim().split('\n')).toEqual([
+      'systemctl --user daemon-reload',
+      'systemctl --user restart wireplumber',
+      'systemctl --user enable --now qp-keepalive',
+    ]);
+  });
+  it('refuses a malformed address before writing anything', () => {
+    for (const bad of ['', 'aa:bb:cc:dd:ee:ff', 'AA:BB:CC:DD:EE', 'AA:BB:CC:DD:EE:FF;rm'])
+      expect(run('qp-speaker-setup', bad)).toBe('bad_mac');
+    expect(readFileSync(calls, 'utf8')).toBe('');
+    expect(() => readFileSync(join(cfg(), 'systemd/user/qp-keepalive.service'))).toThrow();
+  });
+});
