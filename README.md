@@ -4,7 +4,7 @@ An AI home deterrent for the Amazon Developer Hackathon (Build, Ship, Shape, 202
 Alexa+ tracks, with Amazon Bedrock for the AWS Builder mini-challenge.
 
 A Ring motion event becomes a judged, logged decision. A person who is still there at night
-gets a calm, escalating response (interior lights, then exterior light, a descriptive spoken line, a
+gets a calm, escalating response (interior lights, then a descriptive spoken line, then a
 sprinkler), and an armadillo in the yard gets the sprinkler. Benign events (deliveries, cars,
 pets) get no action at all. Every decision is logged with its frame and timestamps, and an
 owner can stand everything down from a signed Stop link or by asking Alexa.
@@ -15,7 +15,7 @@ owner can stand everything down from a signed Stop link or by asking Alexa.
 Ring webhook (signed)
    |
    v
-server.ts  -- verify HMAC, dedupe, log
+server.ts: verify HMAC, dedupe, log
    |
    v
 pipeline.ts
@@ -25,13 +25,13 @@ pipeline.ts
    decide.ts      deterministic profile: log / intruder / wildlife / reject (stale, no evidence)
    |
    v
-coordinator.ts  -- one active incident, write-ahead intents, cooldowns, cleanup, reconcile
+coordinator.ts: one active incident, write-ahead intents, cooldowns, cleanup, reconcile
    ladder.ts      L1 interior lights + notify, L2 exterior light, L3 descriptive speech, L4 sprinkler
    allowlist.ts   every Home Assistant call checked; locks, covers and alarms are never allowed
    actuators.ts   Home Assistant REST, Pi speaker, Telegram (or a dry-run simulator)
    |
    v
-mcp.ts  -- status-mcp, MCP 2025-11-25 over Streamable HTTP, for Alexa+:
+mcp.ts: status-mcp, MCP 2025-11-25 over Streamable HTTP, for Alexa+:
            get_incident_status, list_recent_incidents, get_night_report, get_ledger,
            expect_me, stand_down, set_mode, clear_reconcile
 ```
@@ -85,7 +85,9 @@ What exists today is stated as such, and what does not exist yet is listed after
   uses no faces. _Not yet:_ a second connected household shown next to the first.
 - **Quality of the Idea.** A deterrent judged by its silence: deterministic code escalates only on
   fresh evidence and the model never acts. The line the porch speaks comes from a fixed template
-  and a closed vocabulary (`src/voice.ts`). _Software only:_ filtered composition, Polly cache/fallback and finite Pi adapter now exist; real synthesis/playback and latency remain unverified.
+  and a closed vocabulary (`src/voice.ts`). _Speech verified in part:_ Polly synthesized four
+  approved lines into a private ProBook cache on 2026-10-13, and Pi playback was heard from a Bluetooth speaker in an
+  attended test. Ring-event-to-audio latency is unmeasured, and the service still runs dry run.
 
 ## The night ledger
 
@@ -119,7 +121,19 @@ lingering person is one line for the whole incident, with the age at every level
   `test/fixtures/synthetic-night.json` is a hand-built night, labelled synthetic.
   `node scripts/export-fixture.ts` turns a real night from the state directory into a fixture
   outside the repository and prints how the replay differs from the original.
-- **Spoken line (selected; dry run).** Matt selected speech with L2/L3/L4 at 10/20/40 seconds. `src/voice.ts` composes a fixed, closed-vocabulary line. `src/speech.ts` adds finite Polly PCM/WAV synthesis, cached fallback and failure reporting; `qp-speak` is the Pi integration helper. These adapters are not installed or enabled on hardware by this work. The normal service remains dry run. Legacy fixtures retain explicit bark mode.
+- **Spoken line (selected; dry run).** Matt selected descriptive speech at 20 seconds and the sprinkler at 40 seconds; the 10-second exterior-light step is skipped because zone A has none. `src/voice.ts` composes a fixed, closed-vocabulary line. `src/speech.ts` adds finite Polly PCM/WAV synthesis, cached fallback and failure reporting; `qp-speak` is the Pi integration helper.
+  On 2026-10-13 Polly (voice Ruth, generative engine, us-east-1) synthesized four approved lines
+  into a private ProBook cache in 476 to 880 ms per line. With the provider forced to fail, cached
+  lines were served and uncached lines fell back to the matching cached truthful line. Pi playback
+  was verified in an attended test on 2026-10-13. A Raspberry Pi drove an Anker
+  SoundCore Bluetooth speaker through the same Pi speech player the app uses (`createPiSpeechPlayer`
+  and `qp-speak`). Matt, standing at the speaker, heard the full spoken line after 2 minutes of
+  idle. Dispatch from ProBook to start playback took 0.77 to 0.87 s. That test drove the Pi adapters
+  directly, not a live coordinator run from a Ring event. Stop was verified on the same hardware. A
+  7-second wildlife clip was cut at about 3 s, `qp-stop` returned in 480 ms, a play request dated
+  before the Stop was refused and silent, and a 5-second bark clip ran to its natural end with no
+  playback process left behind. Both clips are original ElevenLabs sound effects, with no
+  copyrighted music. The normal service remains dry run. Legacy fixtures retain explicit bark mode.
 
 Events that were judged actionable but held back (kill switch, cooldown, old evidence) show as
 `held`, never as silent; a camera Ring encrypts shows as `blind`. The morning report never claims
@@ -153,5 +167,7 @@ the incident zone; Stop/close cleanup remains available after context loss.
 Live-source signing/session/provenance boundaries are tested, but a real WHEP/RTSPS decoder
 and trusted absolute capture-time mapping remain open. Locally received stream frames are
 not accepted as timestamp proof. Cam1 is battery powered; session limit is 30 seconds.
-Physical zone A is Matt's selected sprinkler deterrent; exact entity mapping and self-shutoff
-are unverified. Two-empty-frame departure and multiple-notification policy remain in place.
+Physical zone A is Matt's selected sprinkler deterrent, mapped to `valve.rf_water_timer_valve_1`
+with duration setter `number.rf_water_timer_irrigation_duration_1` (confirmed by a timed tag test
+in Home Assistant). App-driven valve actuation, the 30-second self-shutoff and recovery are
+unverified. The exterior light was dropped, and zone A has none. Two-empty-frame departure and multiple-notification policy remain in place.
