@@ -176,6 +176,19 @@ describe('decision pipeline (dry run)', () => {
     expect(saved).toEqual([]);
   });
 
+  it('after primaryAccountId is removed from config, a once-primary household gets no evaluation', async () => {
+    const model = fakeModel([{ class: 'armadillo', confidence: 0.93 }], 'nuisance');
+    const first: Evaluation[] = [];
+    await make(model, { onEvaluation: (e) => first.push(e) }).handle(ev('before'), {});
+    expect(first).toHaveLength(1); // persisted 'acct' as primary
+    const after: Evaluation[] = [];
+    await make(model, {
+      config: { ...cfg, primaryAccountId: undefined },
+      onEvaluation: (e) => after.push(e),
+    }).handle(ev('after'), {});
+    expect(after).toHaveLength(0);
+  });
+
   it('a detected unknown person: would open an intruder incident', async () => {
     const r = await make(fakeModel([{ class: 'person', confidence: 0.9 }], 'unknown', true)).handle(
       ev(),

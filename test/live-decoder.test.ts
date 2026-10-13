@@ -231,6 +231,56 @@ describe('decoder transport lifecycle (QP-08)', () => {
     await expect(s.read()).rejects.toThrow('decoder_bad_magic');
     expect(f.children[0].kills).toEqual(['SIGTERM']);
   });
+  const openFake = async () => {
+    const f = fakeSpawn();
+    const s = await createDecoderTransport({
+      command: (d) => gstDecoderCommand(d, '/h'),
+      token: () => 't',
+      now: () => 1,
+      policy: TRUST,
+      spawn: f.spawn,
+    }).open('a', 'd');
+    return { s, child: f.children[0] };
+  };
+  const tick = () => new Promise((r) => setImmediate(r));
+  it.each(['exit', 'corrupt'])(
+    'a %s after a queued frame invalidates it: read fails instead of delivering held evidence',
+    async (kind) => {
+      const { s, child } = await openFake();
+      child.stdout.write(record({ pts_ns: '1', ref: null }));
+      await tick();
+      if (kind === 'exit') child.exit(3);
+      else child.stdout.write(Buffer.from('garbage!'));
+      await tick();
+      await expect(s.read()).rejects.toThrow(/decoder_/);
+      await s.close();
+    },
+  );
+  it('a token failure happens before spawn, so no helper is left waiting on stdin', async () => {
+    const f = fakeSpawn();
+    const t = createDecoderTransport({
+      command: (d) => gstDecoderCommand(d, '/h'),
+      token: () => {
+        throw new Error('token_unavailable');
+      },
+      now: () => 1,
+      spawn: f.spawn,
+    });
+    await expect(t.open('a', 'd')).rejects.toThrow('token_unavailable');
+    expect(f.children).toHaveLength(0);
+  });
+  it('corrupt output from a helper that ignores SIGTERM is escalated to SIGKILL', async () => {
+    vi.useFakeTimers();
+    const { s, child } = await openFake();
+    child.ignoreTerm = true;
+    child.stdout.write(Buffer.from('garbage!'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(child.kills).toEqual(['SIGTERM']);
+    await vi.advanceTimersByTimeAsync(DECODER_KILL_GRACE_MS);
+    expect(child.kills).toEqual(['SIGTERM', 'SIGKILL']);
+    await s.close(); // shares the same teardown; no extra signals
+    expect(child.kills).toHaveLength(2);
+  });
   it('close releases a pending read and escalates to SIGKILL after the grace period', async () => {
     vi.useFakeTimers();
     const f = fakeSpawn();

@@ -15,10 +15,12 @@ export function householdAccess(
     .get(device) as { account_id: string } | undefined;
   if (bound && bound.account_id !== account) return 'mismatch';
   db.prepare('INSERT OR IGNORE INTO household_devices VALUES (?, ?)').run(device, account);
-  if (configuredPrimary)
-    db.prepare('INSERT OR IGNORE INTO primary_household VALUES (1, ?)').run(configuredPrimary);
-  if (configuredPrimary && primaryHousehold(db) !== configuredPrimary) return 'mismatch';
-  return primaryHousehold(db) === account ? 'primary' : 'ledger_only';
+  // No configured primary means every household is ledger-only, even if an earlier run
+  // persisted one: removing primaryAccountId must take actuation away, not leave it behind.
+  if (!configuredPrimary) return 'ledger_only';
+  db.prepare('INSERT OR IGNORE INTO primary_household VALUES (1, ?)').run(configuredPrimary);
+  if (primaryHousehold(db) !== configuredPrimary) return 'mismatch';
+  return configuredPrimary === account ? 'primary' : 'ledger_only';
 }
 export function primaryHousehold(db: DatabaseSync): string | undefined {
   const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE name='primary_household'").get();

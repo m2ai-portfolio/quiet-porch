@@ -98,39 +98,66 @@ export function createDecoderTransport(opts: {
   return {
     async open(accountId, deviceId) {
       const { file, args } = opts.command(deviceId);
+      const token = opts.token(); // before spawn: a token failure must not leave a helper waiting
       const child = spawn(file, args, { stdio: ['pipe', 'pipe', 'pipe'] });
       await new Promise<void>((resolve, reject) => {
         child.once('spawn', resolve);
         child.once('error', reject);
       });
-      child.stdin!.on('error', () => {}); // a helper that exits early must not crash ProBook
-      child.stdin!.end(`${opts.token()}\n`);
-      return decoderSession(child, accountId, deviceId);
+      try {
+        child.stdin!.on('error', () => {}); // a helper that exits early must not crash ProBook
+        child.stdin!.end(`${token}\n`);
+        return decoderSession(child, accountId, deviceId);
+      } catch (e) {
+        await terminate(child);
+        throw e;
+      }
     },
   };
+
+  // Bounded teardown shared by close() and terminal failures: SIGTERM, then SIGKILL after grace.
+  async function terminate(child: ChildProcess) {
+    const done = () => child.exitCode !== null || child.signalCode !== null;
+    if (done()) return;
+    const exited = new Promise<void>((r) => child.once('exit', () => r()));
+    child.kill('SIGTERM');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const graceful = await Promise.race([
+      exited.then(() => true),
+      new Promise<boolean>((r) => {
+        timer = setTimeout(() => r(false), DECODER_KILL_GRACE_MS);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!graceful && !done()) {
+      child.kill('SIGKILL');
+      await exited;
+    }
+  }
 
   function decoderSession(child: ChildProcess, accountId: string, deviceId: string): LiveSession {
     const parser = createFrameParser();
     let newest: LiveFrame | undefined; // newest only: an older queued frame is never evidence
     let failure: Error | undefined;
     let closed = false;
-    const exited = new Promise<void>((resolve) => {
-      if (child.exitCode !== null || child.signalCode !== null) resolve();
-      else child.once('exit', () => resolve());
-    });
+    let stopping: Promise<void> | undefined;
+    const stop = () => (stopping ??= terminate(child));
     const waiters: Array<() => void> = [];
     const wake = () => waiters.splice(0).forEach((w) => w());
+    // A failed decoder invalidates anything it queued: held frames are never delivered after it.
     const fail = (e: Error) => {
       failure ??= e;
+      newest = undefined;
       wake();
     };
     child.stdout!.on('data', (chunk: Buffer) => {
+      if (failure) return;
       let records: DecodedRecord[];
       try {
         records = parser.push(chunk);
       } catch (e) {
         fail(e as Error);
-        child.kill('SIGTERM');
+        void stop();
         return;
       }
       for (const r of records) {
@@ -153,38 +180,24 @@ export function createDecoderTransport(opts: {
       }
     });
     child.once('error', (e) => fail(e));
-    void exited.then(() => fail(new Error('decoder_exited')));
+    if (child.exitCode !== null || child.signalCode !== null) fail(new Error('decoder_exited'));
+    else child.once('exit', () => fail(new Error('decoder_exited')));
     return {
       async read() {
         if (closed) return undefined;
         if (!newest && !failure) await new Promise<void>((r) => waiters.push(r));
         if (closed) return undefined;
-        if (newest) {
-          const f = newest;
-          newest = undefined;
-          return f;
-        }
-        throw failure ?? new Error('decoder_exited');
+        if (failure) throw failure;
+        const f = newest!;
+        newest = undefined;
+        return f;
       },
       async close() {
         if (!closed) {
           closed = true;
           wake();
         }
-        if (child.exitCode !== null || child.signalCode !== null) return;
-        child.kill('SIGTERM');
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const graceful = await Promise.race([
-          exited.then(() => true),
-          new Promise<boolean>((r) => {
-            timer = setTimeout(() => r(false), DECODER_KILL_GRACE_MS);
-          }),
-        ]);
-        clearTimeout(timer);
-        if (!graceful) {
-          child.kill('SIGKILL');
-          await exited;
-        }
+        await stop();
       },
     };
   }

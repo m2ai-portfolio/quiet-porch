@@ -64,6 +64,17 @@ describe('zone and household boundaries', () => {
     db.close();
     rmSync(dir, { recursive: true });
   });
+  it('removing the configured primary makes a previously primary household ledger-only', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'qp-household-'));
+    const path = join(dir, 'db');
+    let db = openDb(path);
+    expect(householdAccess(db, 'primary', 'cam1', true, 'primary')).toBe('primary');
+    db.close();
+    db = openDb(path);
+    expect(householdAccess(db, 'primary', 'cam1', true)).toBe('ledger_only');
+    db.close();
+    rmSync(dir, { recursive: true });
+  });
   it('keeps account-filtered ledger rows separate and records incomplete outcomes honestly', () => {
     const db = openDb(':memory:');
     for (const account of ['first', 'second']) {

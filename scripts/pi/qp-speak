@@ -7,6 +7,8 @@ set -euo pipefail
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/quiet-porch"
 CLIPS="${QP_CLIP_DIR:-$HOME/quiet-porch/clips}"
 VOLUME_CAP="${QP_VOLUME_CAP:-0.60}"
+# 0.60 is a ceiling, not a default: an override may lower it, never raise it.
+VOLUME_CAP="$(awk -v c="$VOLUME_CAP" 'BEGIN { v = c + 0; if (v <= 0 || v > 0.60) v = 0.60; printf "%.2f", v }')"
 intent="${1:-}" epoch="${2:-}" clip="${3:-}"
 [[ $intent =~ ^[A-Za-z0-9-]{1,64}$ ]] || { echo "bad_intent"; exit 2; }
 [[ $epoch =~ ^[0-9]{10,16}$ ]] || { echo "bad_epoch"; exit 2; }
