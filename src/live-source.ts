@@ -98,7 +98,10 @@ export function createLiveSource(opts: {
       return pending;
     },
     latest() {
-      return newest && opts.now() - newest.captureTs < 6000 ? newest : undefined;
+      if (!newest) return undefined;
+      // A clock rollback can make held evidence future-dated: that is not fresh either.
+      const age = opts.now() - newest.captureTs;
+      return age >= 0 && age < 6000 ? newest : undefined;
     },
     async stop() {
       stopped = true;

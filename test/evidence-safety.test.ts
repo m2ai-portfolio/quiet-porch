@@ -263,6 +263,21 @@ describe('live-source session and provenance', () => {
       await source.stop();
     },
   );
+  it('latest() drops an accepted frame once a clock rollback makes it future-dated', async () => {
+    let now = 10_000;
+    const source = createLiveSource({
+      transport: { open: async () => ({ read: async () => frame(10_000), close: async () => {} }) },
+      accountId: 'a',
+      deviceId: 'd',
+      battery: true,
+      now: () => now,
+    });
+    expect(await source.poll()).toBeDefined();
+    expect(source.latest()?.captureTs).toBe(10_000); // reverse state: fresh and held
+    now = 8000;
+    expect(source.latest()).toBeUndefined();
+    await source.stop();
+  });
   it('keeps monotonic capture ordering after an invalid frame', async () => {
     const samples = [frame(100), frame(90), frame(95), frame(110)];
     const source = createLiveSource({
