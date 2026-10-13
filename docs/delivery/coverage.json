@@ -17,7 +17,7 @@
       "workstream": "Live-view dwell",
       "status": "Partial / blocked",
       "evidence": "WHEP signaling, RTSPS endpoint, session renewal, timeout/stop, account binding, timestamp/freshness boundary and injected pipeline source have mock tests.",
-      "limits": "Actual WHEP/RTSPS decoder and trusted absolute Ring capture mapping are still missing. No real session/spike or measured go/no-go."
+      "limits": "Authorized RTSPS/H.264 spike decoded 13 samples across 58.478 seconds; no trusted absolute capture-time metadata obtained. Production live decoding integration and freshness proof remain blocked."
     },
     {
       "id": "F2",
@@ -52,7 +52,7 @@
       "workstream": "Outdoor hardware",
       "status": "Prepared / blocked",
       "evidence": "Bounded valve plan and readback/reconcile tests preserved; exterior zone enforcement and safe cleanup; attended-test runbook. Matt selected physical zone A.",
-      "limits": "Exact zone A valve/setter and speaker route unconfirmed. No real light/valve/speaker test, self-shutoff or recovery measurement."
+      "limits": "Front-yard zone A mapping confirmed by Matt. HA actuator entities report unavailable despite Tuya loaded. No physical output/shutoff test authorized or performed."
     },
     {
       "id": "F7",
@@ -129,5 +129,15 @@
     "actualSurfaceTested": false,
     "audibleBrowserSpeechTested": false,
     "interactiveCuaConnection": "still absent"
+  },
+  "authorizedDiscovery": {
+    "cameraDecodedSamples": 13,
+    "cameraTotalWallSeconds": 58.478,
+    "captureTimeProvenance": "unverified",
+    "haActuators": "unavailable",
+    "tuyaIntegration": "loaded",
+    "piSpeaker": "connected/default output",
+    "zoneA": "front-yard mapping confirmed",
+    "physicalOutputs": false
   }
 }
