@@ -124,17 +124,17 @@ describe('checkAction', () => {
 
 describe('bounded setters and pi_audio (plan v7 section 8)', () => {
   const valve = {
-    entity_id: 'valve.front_yard_sprinkler_valve',
+    entity_id: 'valve.rf_water_timer_valve_1',
     placement: 'exterior',
     zones: ['front_yard'],
     services: { open_valve: {}, close_valve: {} },
   };
   const setter = (over: Record<string, unknown> = {}) => ({
-    entity_id: 'number.front_yard_sprinkler_irrigation_duration',
+    entity_id: 'number.rf_water_timer_irrigation_duration_1',
     placement: 'exterior',
     zones: ['front_yard'],
     services: { set_value: { params: { value: { min: 5, max: 30 } } } },
-    cleanup_via: 'valve.front_yard_sprinkler_valve',
+    cleanup_via: 'valve.rf_water_timer_valve_1',
     ...over,
   });
 
@@ -151,7 +151,7 @@ describe('bounded setters and pi_audio (plan v7 section 8)', () => {
   it('set_value is bounded to 5..30 and is an escalation command', () => {
     const a = parseAllowlist({ entities: [valve, setter()] });
     const req = (value: number) => ({
-      entity_id: 'number.front_yard_sprinkler_irrigation_duration',
+      entity_id: 'number.rf_water_timer_irrigation_duration_1',
       service: 'set_value',
       data: { value },
       zone: 'front_yard',
@@ -176,8 +176,8 @@ describe('bounded setters and pi_audio (plan v7 section 8)', () => {
       cls: 'safety',
     });
     // The Worklights HA light group is the coordinator's interior light (10-08).
-    expect(shipped.entities.get('light.worklights')?.placement).toBe('interior');
-    expect(checkAction(shipped, { entity_id: 'light.worklights', service: 'turn_off' })).toEqual({
+    expect(shipped.entities.get('light.worklight_1')?.placement).toBe('interior');
+    expect(checkAction(shipped, { entity_id: 'light.worklight_1', service: 'turn_off' })).toEqual({
       ok: true,
       cls: 'safety',
     });

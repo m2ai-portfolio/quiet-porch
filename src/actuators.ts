@@ -58,8 +58,10 @@ export interface DryRunLog {
 export function createDryRunActuators(log: DryRunLog, clock: { now(): number } = Date): Actuators {
   const state = new Map<string, string>();
   const valveOpenedAt = new Map<string, { at: number; seconds: number }>();
+  // HA's Tuya naming: a single-outlet timer has valve.X_valve / number.X_irrigation_duration, a
+  // multi-outlet one valve.X_valve_N / number.X_irrigation_duration_N.
   const durationFor = (valve: string) => {
-    const setter = valve.replace(/^valve\.(.*)_valve$/, 'number.$1_irrigation_duration');
+    const setter = valve.replace(/^valve\.(.*)_valve(_\d+)?$/, 'number.$1_irrigation_duration$2');
     return Number(state.get(setter) ?? '0');
   };
   const read = (entity: string): string | undefined => {

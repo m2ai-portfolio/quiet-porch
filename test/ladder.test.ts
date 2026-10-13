@@ -121,8 +121,8 @@ const cfg: ActuatorConfig = {
   zones: {
     front_yard: {
       exteriorLight: 'switch.patio_light_socket_1',
-      valve: 'valve.front_yard_sprinkler_valve',
-      durationSetter: 'number.front_yard_sprinkler_irrigation_duration',
+      valve: 'valve.rf_water_timer_valve_1',
+      durationSetter: 'number.rf_water_timer_irrigation_duration_1',
       speaker: 'pi_audio.porch_speaker',
     },
   },
@@ -145,8 +145,8 @@ describe('action plans', () => {
     });
     expect(intruderPlan(4, 'front_yard', cfg).steps[0]).toEqual({
       kind: 'valve_run',
-      setter: 'number.front_yard_sprinkler_irrigation_duration',
-      valve: 'valve.front_yard_sprinkler_valve',
+      setter: 'number.rf_water_timer_irrigation_duration_1',
+      valve: 'valve.rf_water_timer_valve_1',
       seconds: 30,
     });
   });

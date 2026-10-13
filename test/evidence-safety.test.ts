@@ -44,7 +44,7 @@ describe('zone and household boundaries', () => {
   });
 
   it('rejects missing/wrong zones and permits cleanup after context loss', () => {
-    const req = { entity_id: 'valve.front_yard_sprinkler_valve', service: 'open_valve' };
+    const req = { entity_id: 'valve.rf_water_timer_valve_1', service: 'open_valve' };
     expect(checkAction(allow, req).ok).toBe(false);
     expect(checkAction(allow, { ...req, zone: 'back_yard' }).ok).toBe(false);
     expect(checkAction(allow, { ...req, zone: 'front_yard' }).ok).toBe(true);

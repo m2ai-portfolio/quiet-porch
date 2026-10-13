@@ -26,12 +26,12 @@
       "maxIntruderLevel": 4,
       "cooldownMs": 600000,
       "ownerUserIds": ["mcp:owner"],
-      "interiorLights": ["light.worklights"],
+      "interiorLights": ["light.worklight_1"],
       "zones": {
         "front_yard": {
           "exteriorLight": "switch.patio_light_socket_1",
-          "valve": "valve.front_yard_sprinkler_valve",
-          "durationSetter": "number.front_yard_sprinkler_irrigation_duration",
+          "valve": "valve.rf_water_timer_valve_1",
+          "durationSetter": "number.rf_water_timer_irrigation_duration_1",
           "speaker": "pi_audio.porch_speaker"
         }
       },
@@ -46,7 +46,7 @@
   "allowlist": {
     "entities": [
       {
-        "entity_id": "valve.front_yard_sprinkler_valve",
+        "entity_id": "valve.rf_water_timer_valve_1",
         "placement": "exterior",
         "zones": ["front_yard"],
         "services": {
@@ -55,7 +55,7 @@
         }
       },
       {
-        "entity_id": "number.front_yard_sprinkler_irrigation_duration",
+        "entity_id": "number.rf_water_timer_irrigation_duration_1",
         "placement": "exterior",
         "zones": ["front_yard"],
         "services": {
@@ -68,7 +68,7 @@
             }
           }
         },
-        "cleanup_via": "valve.front_yard_sprinkler_valve"
+        "cleanup_via": "valve.rf_water_timer_valve_1"
       },
       {
         "entity_id": "switch.patio_light_socket_1",
@@ -95,7 +95,7 @@
         }
       },
       {
-        "entity_id": "light.worklights",
+        "entity_id": "light.worklight_1",
         "placement": "interior",
         "zones": [],
         "services": {

@@ -467,7 +467,7 @@ describe('ledger honesty, third pass', () => {
     );
     r.db!.exec(
       'INSERT INTO action_intents (intent_id, incident_id, entity_id, service, data, cls, evidence_id, dispatched_at, status) ' +
-        "SELECT 'forged', incident_id, 'light.worklights', 'turn_on', '{}', 'escalation', evidence_id, dispatched_at, 'done' FROM action_intents WHERE service = 'play_clip' LIMIT 1",
+        "SELECT 'forged', incident_id, 'light.worklight_1', 'turn_on', '{}', 'escalation', evidence_id, dispatched_at, 'done' FROM action_intents WHERE service = 'play_clip' LIMIT 1",
     );
     const gate = buildLedger(r.db!, { from: 0, to: 9e15 }).lines.find(
       (l) => l.profile === 'intruder',
