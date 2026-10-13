@@ -224,6 +224,20 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     return timedOut ? 'timeout' : (r as T);
   }
 
+  // One freshness rule for both paths: null when the incident's evidence is still the newest for
+  // its zone, not future-dated, and younger than maxEvidenceAgeMs; otherwise why it is stale.
+  // Actuator dispatch refuses stale evidence. A level notification is still sent, labelled with
+  // this reason (owner policy, 2026-10-13).
+  function evidenceStaleness(ctx: Ctx): string | null {
+    const newest = latest.get(ctx.zone);
+    if (!ctx.evidenceId) return 'no evidence attached';
+    if (newest?.evidenceId !== ctx.evidenceId) return 'superseded by newer evidence';
+    const age = clock.now() - newest.captureTs;
+    if (age < 0) return 'evidence time is in the future';
+    if (age >= ctx.maxEvidenceAgeMs) return `evidence ${Math.round(age / 1000)} s old`;
+    return null;
+  }
+
   // ---- the one path to an actuator ----
 
   async function dispatch(
@@ -268,15 +282,7 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
       if (!inc || inc.status !== 'active' || inc.version !== ctx.version) {
         return refuse('incident_changed');
       }
-      const newest = latest.get(ctx.zone);
-      if (
-        !ctx.evidenceId ||
-        newest?.evidenceId !== ctx.evidenceId ||
-        clock.now() < newest.captureTs ||
-        clock.now() - newest.captureTs >= ctx.maxEvidenceAgeMs
-      ) {
-        return refuse('stale_evidence');
-      }
+      if (evidenceStaleness(ctx) !== null) return refuse('stale_evidence');
       if (domainOf(entity_id) === 'pi_audio' && (service === 'play_clip' || service === 'speak')) {
         const since = clock.now() - AUDIO_CAP.windowMs;
         while (audioPlays.length && audioPlays[0] < since) audioPlays.shift();
@@ -487,14 +493,10 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     if (s.kind === 'notify') {
       const inc = incidentById(ctx.incidentId);
       if (!inc || inc.status !== 'active' || inc.version !== ctx.version) return;
-      const evidence = latest.get(ctx.zone);
-      if (
-        !evidence ||
-        evidence.evidenceId !== ctx.evidenceId ||
-        clock.now() - evidence.captureTs >= ctx.maxEvidenceAgeMs
-      ) {
-        log({ event: 'escalation_refused', reason: 'stale_evidence', incident_id: ctx.incidentId });
-        return;
+      const stale = evidenceStaleness(ctx);
+      if (stale !== null) {
+        log({ event: 'notify_stale_labelled', reason: stale, incident_id: ctx.incidentId });
+        return notify(ctx.incidentId, `${s.text} (stale: ${stale})`, ctx.frame, ctx.evidenceId);
       }
       return notify(ctx.incidentId, s.text, ctx.frame, ctx.evidenceId);
     }

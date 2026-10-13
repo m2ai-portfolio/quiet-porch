@@ -231,23 +231,36 @@ describe('decoder transport lifecycle (QP-08)', () => {
     await expect(s.read()).rejects.toThrow('decoder_bad_magic');
     expect(f.children[0].kills).toEqual(['SIGTERM']);
   });
-  const openFake = async () => {
+  const openFake = async (now = 1) => {
     const f = fakeSpawn();
     const s = await createDecoderTransport({
       command: (d) => gstDecoderCommand(d, '/h'),
       token: () => 't',
-      now: () => 1,
+      now: () => now,
       policy: TRUST,
       spawn: f.spawn,
     }).open('a', 'd');
     return { s, child: f.children[0] };
   };
   const tick = () => new Promise((r) => setImmediate(r));
+  // A frame the trusted policy grants ring authority: a fresh x-ntp reference 200 ms before now.
+  const NOW = 1_760_000_000_000;
+  const trustedRecord = () =>
+    record({ pts_ns: '1', ref: { clock: 'timestamp/x-ntp', ts_ns: String(ntpNs(NOW - 200)) } });
+  it('reverse state: with no helper failure, the queued trusted frame is delivered as ring', async () => {
+    const { s, child } = await openFake(NOW);
+    child.stdout.write(trustedRecord());
+    await tick();
+    const frame = await s.read();
+    expect(frame?.timestampAuthority).toBe('ring');
+    expect(frame?.captureTs).toBe(NOW - 200);
+    await s.close();
+  });
   it.each(['exit', 'corrupt'])(
-    'a %s after a queued frame invalidates it: read fails instead of delivering held evidence',
+    'a %s after a queued trusted frame invalidates it: read fails instead of delivering held evidence',
     async (kind) => {
-      const { s, child } = await openFake();
-      child.stdout.write(record({ pts_ns: '1', ref: null }));
+      const { s, child } = await openFake(NOW);
+      child.stdout.write(trustedRecord());
       await tick();
       if (kind === 'exit') child.exit(3);
       else child.stdout.write(Buffer.from('garbage!'));

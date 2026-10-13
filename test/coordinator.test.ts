@@ -207,8 +207,39 @@ describe('coordinator: intruder ladder dispatch (dry run)', () => {
     const t = setup();
     await t.coord.onEvaluation(t.ev('intruder', 'person_unknown', { captureTs: T0 - 16_000 }));
     await t.settle();
-    expect(t.intents()).toEqual([]);
+    expect(t.intents().filter((i) => i.service !== 'notify')).toEqual([]);
+    expect(t.calls()).toEqual([]);
     expect(t.events.some((e) => e.reason === 'stale_evidence')).toBe(true);
+  });
+
+  it('a stale level notification is still sent, labelled with why it is stale', async () => {
+    const t = setup();
+    await t.coord.onEvaluation(t.ev('intruder', 'person_unknown', { captureTs: T0 - 16_000 }));
+    await t.settle();
+    const texts = t.notes().map((n) => (n as { text: string }).text);
+    expect(texts).toEqual([
+      '[dry run, would send] Unknown person in front_yard (L1). (stale: evidence 16 s old)',
+    ]);
+    // Reverse state: fresh evidence produces the same notification without a label.
+    const f = setup();
+    await f.coord.onEvaluation(f.ev('intruder', 'person_unknown'));
+    await f.settle();
+    expect(f.notes().map((n) => (n as { text: string }).text)).toEqual([
+      '[dry run, would send] Unknown person in front_yard (L1).',
+    ]);
+    expect(f.calls()).toEqual(['turn_on light.stairs']);
+  });
+
+  it('future-dated evidence (clock rollback): actuators refuse it, the notification is labelled', async () => {
+    const t = setup();
+    await t.coord.onEvaluation(t.ev('intruder', 'person_unknown', { captureTs: T0 + 2000 }));
+    await t.settle();
+    expect(t.calls()).toEqual([]);
+    expect(t.intents().filter((i) => i.service !== 'notify')).toEqual([]);
+    expect(t.events.some((e) => e.reason === 'stale_evidence')).toBe(true);
+    expect(t.notes().map((n) => (n as { text: string }).text)).toEqual([
+      '[dry run, would send] Unknown person in front_yard (L1). (stale: evidence time is in the future)',
+    ]);
   });
 
   it('kill switch: no incident opens and nothing is dispatched', async () => {
@@ -425,7 +456,8 @@ describe('coordinator: wildlife profile', () => {
     const t = setup();
     await t.coord.onEvaluation(t.ev('intruder', 'person_unknown', { captureTs: T0 - 20_000 }));
     await t.settle();
-    expect(t.intents()).toEqual([]);
+    expect(t.intents().filter((i) => i.service !== 'notify')).toEqual([]);
+    expect(t.calls()).toEqual([]);
   });
 
   it('a duration read-back mismatch blocks open_valve', async () => {
