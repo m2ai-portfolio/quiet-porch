@@ -1,12 +1,23 @@
 // The Pi audio scripts, run locally with wpctl/systemd-run/systemctl replaced by shims that
 // record their arguments. Covers the stop-epoch ordering; real playback is a hardware gate.
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 const SCRIPTS = new URL('../scripts/pi/', import.meta.url).pathname;
+
+// The Pi scripts take a flock before anything else; macOS does not ship it, so the scripts exit
+// silently there. Run these tests only where flock is on the PATH the scripts get.
+const hasFlock = ['/usr/bin', '/bin'].some((dir) => existsSync(join(dir, 'flock')));
 
 let home: string;
 let calls: string;
@@ -47,7 +58,7 @@ beforeEach(() => {
   shim(bin, 'systemctl', 'true'); // list-units prints nothing: no active unit
 });
 
-describe('qp-play / qp-stop', () => {
+describe.skipIf(!hasFlock)('qp-play / qp-stop', () => {
   it('play starts a capped transient unit with RuntimeMaxSec and clamps the volume', () => {
     expect(run('qp-play', 'abc-1', '1791400000000', 'bark-5s')).toBe('started qp-audio-abc-1');
     const log = readFileSync(calls, 'utf8');
