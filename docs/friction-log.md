@@ -70,7 +70,7 @@ Times: `Z` is UTC, `CDT` is America/Chicago. Dates are 2026.
 - **Request ID:** not captured.
 - **Finding:** `human` (camera 1): 54 of 54 `200` at event +4 s and +9 s. At event +14 s the frame returned is earlier than requested in 12 of 18 `human` and 15 of 16 `motion` events, by up to 4.1 s.
 - **Cost:** stored frames give fresh evidence for the life of one clip only, under the 20 s dwell the ladder needs, so the ladder is capped at L1 on clip evidence.
-- **Workaround:** live view as the freshness source (in progress); Plan B is L1 plus voice on clip evidence with the ledger saying `source clip`.
+- **Workaround:** live view as the freshness source was tried and recorded as a no-go (F-17), so the ladder works from clip evidence and the ledger says `source clip`.
 - **Reproduce:** `node scripts/probe-readout.ts`.
 
 ### F-06 Webhook delivery lag has a long tail
@@ -162,11 +162,39 @@ Times: `Z` is UTC, `CDT` is America/Chicago. Dates are 2026.
 
 ## Amazon Polly
 
-### F-15 Generative voice not yet tried
+### F-15 Generative voice: four lines timed, one run each
 
-- **Endpoint:** Polly generative voices (voice ID to be chosen on day one of the voice work).
-- **Finding:** nothing measured. The line composer and banned-word filter (`src/voice.ts`) exist behind a stub; the Polly call and its latency (target under 3 s, cached fallback phrase) are not built yet.
-- **Reproduce:** `npx vitest run test/voice.test.ts` covers the composer only.
+- **Endpoint:** Amazon Polly, voice Ruth, generative engine, `us-east-1`.
+- **Observed:** 2026-10-13, attended session.
+- **Request ID:** not recorded in the validation record.
+- **Finding:** the four approved lines synthesized in 476 ms ("You're on camera.", 1.192 s of audio), 808 ms (with "The owner has been notified.", 2.939 s), 558 ms (with "at the front yard", 1.960 s) and 880 ms (both, 3.707 s), as WAV PCM s16le mono 16 kHz. With the provider forced to fail, 4 of 4 cached lines were served from the cache, and two uncached driveway lines fell back to the matching cached truthful line.
+- **Cost:** well under the 3 s target. These are component timings from one run per line; no Ring-event-to-audio latency has been measured.
+- **Workaround:** the lines come from a closed vocabulary and are synthesized ahead of time, so a Polly outage plays a cached line that is still true and never a different claim or silence.
+- **Reproduce:** `npx vitest run test/voice.test.ts` covers the composer. The synthesis timings are from the attended session recorded in `docs/delivery/validation.txt` (reported, not re-run).
+
+## Raspberry Pi speaker
+
+### F-16 A Bluetooth speaker drops the first 2 to 7 s of every clip
+
+- **Endpoint:** Raspberry Pi with an Anker SoundCore Bluetooth speaker (A2DP), PipeWire, `scripts/pi/qp-play` and `qp-speak`.
+- **Observed:** 2026-10-13, attended session; Matt at the speaker.
+- **Request ID:** not applicable (local hardware).
+- **Finding:** the start of every clip played after idle was lost. Two causes: PipeWire suspended the idle A2DP sink and took about 7 s to resume, and the speaker muted its amplifier on silence and took about 2 s to wake.
+- **Cost:** a spoken line of 1 to 4 s could be inaudible. An earlier dispatch run of 770 ms came before the fix, when the audio was lost, and is not used.
+- **Workaround:** `scripts/pi/qp-speaker-setup` installs a WirePlumber rule (A2DP pinned, suspend timeout 0, no pause on idle) and a user unit that loops an inaudible 20 Hz tone at -40 dBFS. After 2 minutes of idle the full line "You're on camera at the front yard. The owner has been notified." was heard; dispatch to the start of playback took 865 ms (one run, the time the Pi began playback rather than a measured time to audible sound).
+- **Reproduce:** attended only. Let the speaker idle for 2 minutes, then send a line through `qp-speak`. Session evidence QP-15 and QP-16 is summarised in `docs/delivery/validation.txt`.
+
+## Ring live view
+
+### F-17 Live view decodes, but carries no reference timestamp
+
+- **Endpoint:** Ring live view, receive-only RTSPS sessions to camera 1 (battery sessions last up to 30 s, line-powered up to 60 s, per the documentation).
+- **Observed:** 2026-10-12, three sessions, 58.478 s in total.
+- **Request ID:** not recorded in the spike write-up.
+- **Finding:** H.264 decoded (13 samples), but none carried a reference-timestamp meta sample, and the SDP advertised neither `a=ts-refclk` nor `a=mediaclk`. Stream PTS is session-relative and local receipt time includes network, relay and decoder delay of unknown size, so neither is a capture time.
+- **Cost:** the 6 s freshness gate cannot be applied to a live frame, so live frames cannot trigger outputs and the ladder keeps the recorded event clip as its evidence.
+- **Workaround:** `LIVE_CAPTURE_NO_GO` in `src/capture-time.ts` labels every decoded live frame `arrival` and `createLiveSource` rejects it. `deriveCaptureTime` would accept a stream reference only from an allowlisted clock within 250 ms ahead of and 2000 ms behind receipt, and only with an explicit policy switch.
+- **Reproduce:** `docs/delivery/live-view-spike.md` and `docs/delivery/capture-time-provenance.md`; `npx vitest run test/live-decoder.test.ts`.
 
 ## Product feedback for Amazon
 
@@ -178,3 +206,4 @@ Each item follows from an entry above.
 4. State the expected delay of `other_motion` webhooks, or send them when the classification is not final (F-02).
 5. Name the field of the token-exchange POST (F-08), and say in the console that linking starts in the AppStore.
 6. Put `e2e_encryption` in the `include=configurations` documentation and publish the Playground host and token flow (F-09, F-11).
+7. Expose an absolute capture time for live-view frames, for example an RTCP sender-report NTP time or `a=ts-refclk` in the SDP, and say which clock it comes from (F-17).
