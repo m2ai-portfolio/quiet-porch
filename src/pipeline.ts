@@ -1,3 +1,4 @@
+import { householdAccess } from './household.ts';
 // Decision pipeline, dry run (plan v7 build step 2):
 //   webhook -> events (dedupe) -> event frame -> evidence -> perception -> critique ->
 //   profile selection -> decision log.
@@ -12,7 +13,13 @@ import {
   type Critique,
   type HouseholdContext,
 } from './critique.ts';
-import { recordDecision, recordEvent, recordEvidence, type DecisionKind } from './db.ts';
+import {
+  recordDecision,
+  recordEvent,
+  recordEvidence,
+  recordOutcome,
+  type DecisionKind,
+} from './db.ts';
 import type { Evaluation } from './coordinator.ts';
 import { decide, inWindow, needsCritique, type Decision } from './decide.ts';
 import {
@@ -23,6 +30,7 @@ import {
   type Download,
   type MotionEvent,
   type ProbeRecord,
+  type EventFrame,
 } from './frames.ts';
 import {
   perceptionPrompt,
@@ -38,6 +46,7 @@ export const MAX_EVIDENCE_AGE_MS = 15_000;
 export const WILDLIFE_MAX_EVIDENCE_AGE_CEILING_MS = 40_000;
 
 export interface PipelineConfig {
+  primaryAccountId?: string; // absent means all accounts are ledger-only
   timezone: string;
   nightWindow: { start: string; end: string };
   zones: Record<string, string>; // Ring device id -> zone
@@ -71,6 +80,7 @@ export interface DecisionRecord {
 
 export interface PipelineDeps {
   db: DatabaseSync;
+  liveFrame?: (ev: MotionEvent) => Promise<EventFrame | undefined>;
   download: Download;
   converse: (content: ContentBlock[]) => Promise<string>;
   killed: () => boolean;
@@ -88,6 +98,11 @@ export interface PipelineDeps {
 
 export function parsePipelineConfig(raw: unknown): PipelineConfig {
   const c = raw as Partial<PipelineConfig> | null;
+  if (
+    c?.primaryAccountId !== undefined &&
+    (typeof c.primaryAccountId !== 'string' || !c.primaryAccountId)
+  )
+    throw new Error('invalid primaryAccountId');
   if (!c || typeof c !== 'object') throw new Error('pipeline config: not an object');
   if (c.dryRun !== true)
     throw new Error('pipeline config: dryRun must be true (no actuators in step 2)');
@@ -220,6 +235,13 @@ export function createPipeline(cfg: PipelineConfig, deps: PipelineDeps) {
 
   async function handle(ev: MotionEvent, payload: unknown): Promise<DecisionRecord | undefined> {
     const zone = cfg.zones[ev.deviceId] ?? 'unmapped';
+    const access = householdAccess(
+      deps.db,
+      ev.accountId,
+      ev.deviceId,
+      zone !== 'unmapped',
+      cfg.primaryAccountId,
+    );
     const fresh = recordEvent(
       deps.db,
       { source: 'ring', sourceEventId: ev.eventId, type: 'motion_detected', zone, payload },
@@ -232,7 +254,7 @@ export function createPipeline(cfg: PipelineConfig, deps: PipelineDeps) {
       kind: DecisionKind,
       reason: string,
       extra: Partial<DecisionRecord> = {},
-      evidence?: { captureTs: number; frame: Buffer; species?: string },
+      evidence?: { captureTs: number; frame: Buffer; species?: string; source?: 'clip' | 'live' },
     ): DecisionRecord => {
       timings.decided_after_event_ms = clock.now() - ev.eventTs;
       const rec: DecisionRecord = {
@@ -262,6 +284,18 @@ export function createPipeline(cfg: PipelineConfig, deps: PipelineDeps) {
         clock.now(), // the injected clock, so a replay on virtual time records virtual time
       );
       deps.writeDecision(rec);
+      if (access !== 'primary') {
+        recordOutcome(
+          deps.db,
+          {
+            sourceEventId: ev.eventId,
+            outcome: 'not_opened',
+            note: access === 'ledger_only' ? 'ledger_only_household' : access,
+          },
+          clock.now(),
+        );
+        return rec;
+      }
       deps.onEvaluation?.({
         sourceEventId: ev.eventId,
         zone,
@@ -271,17 +305,48 @@ export function createPipeline(cfg: PipelineConfig, deps: PipelineDeps) {
         evidenceId: rec.evidence_id,
         captureTs: evidence?.captureTs,
         frame: evidence?.frame,
+        source: evidence?.source ?? 'clip',
+        voiceSlots: (rec.perception as { voice_slots?: { place?: string; clothing?: string } })
+          ?.voice_slots,
       });
       return rec;
     };
 
+    if (access === 'unmapped' || access === 'mismatch')
+      return finish('reject', `household_${access}`);
     if (deps.killed()) return finish('killed', 'kill_switch');
     if (deps.isBlind?.(ev.deviceId)) return finish('no_evidence', 'blind_encrypted');
     // One evaluation per camera at a time; a burst is logged, not stacked into Ring/Bedrock.
     if (inFlight.has(ev.deviceId)) return finish('log', 'camera_busy');
     inFlight.add(ev.deviceId);
     try {
-      const { frame, record } = await acquireEventFrame(ev, deps.download, clock);
+      let live: EventFrame | undefined;
+      try {
+        live = await deps.liveFrame?.(ev);
+      } catch {
+        /* live failure falls back to clip evidence */
+      }
+      const usableLive =
+        live?.origin === 'live' &&
+        live.captureTs <= clock.now() &&
+        clock.now() - live.captureTs < 6000 &&
+        live.jpeg[0] === 255 &&
+        live.jpeg[1] === 216
+          ? live
+          : undefined;
+      const { frame, record } = usableLive
+        ? {
+            frame: usableLive,
+            record: {
+              device_id: ev.deviceId,
+              sub_type: ev.subType,
+              event_ts: ev.eventTs,
+              received_after_event_ms: ev.receivedAt - ev.eventTs,
+              attempts: [],
+              ready_after_event_ms: clock.now() - ev.eventTs,
+            },
+          }
+        : await acquireEventFrame(ev, deps.download, clock);
       timings.frame_ready_after_event_ms = record.ready_after_event_ms;
       if (cfg.followUpProbe) {
         void probeFollowUps(ev, deps.download, clock)
@@ -302,7 +367,7 @@ export function createPipeline(cfg: PipelineConfig, deps: PipelineDeps) {
         {
           evidenceId,
           zone,
-          source: `ring:${ev.deviceId}`,
+          source: frame.origin === 'live' ? 'live' : `ring:${ev.deviceId}`,
           captureTs: frame.captureTs,
           imageSha256: imageSha,
         },
@@ -330,8 +395,18 @@ export function createPipeline(cfg: PipelineConfig, deps: PipelineDeps) {
       };
       // Evidence must still be fresh when a profile would act (plan v7 section 4).
       const species = d.kind === 'wildlife' ? d.species : undefined;
-      const evidence = { captureTs: frame.captureTs, frame: frame.jpeg, species };
-      const maxAge = d.kind === 'wildlife' ? cfg.wildlifeMaxEvidenceAgeMs : MAX_EVIDENCE_AGE_MS;
+      const evidence = {
+        captureTs: frame.captureTs,
+        frame: frame.jpeg,
+        species,
+        source: frame.origin === 'live' ? ('live' as const) : ('clip' as const),
+      };
+      const maxAge =
+        frame.origin === 'live'
+          ? 6000
+          : d.kind === 'wildlife'
+            ? cfg.wildlifeMaxEvidenceAgeMs
+            : MAX_EVIDENCE_AGE_MS;
       if ((d.kind === 'intruder' || d.kind === 'wildlife') && age > maxAge) {
         return finish('reject', `stale_evidence_${age}ms_${d.kind}`, extra, evidence);
       }

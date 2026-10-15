@@ -1,0 +1,14 @@
+# Quiet Porch (QP-15, 2026-10-13): keep the Anker SoundCore on A2DP and awake.
+# Suspend/pause between sounds loses the start: ~7 s (BT wake) or ~2 s (speaker amp). Keep it streaming silence.
+# When suspended, waking the stream takes ~7 s, so short clips are lost entirely; after a
+# wireplumber restart the card also came up in HSP/HFP. Undo: delete this file, restart wireplumber.
+monitor.bluez.rules = [
+  {
+    matches = [ { device.name = "bluez_card.@SPEAKER_ID@" } ]
+    actions = { update-props = { bluez5.auto-connect = [ a2dp_sink ], device.profile = "a2dp-sink" } }
+  }
+  {
+    matches = [ { node.name = "bluez_output.@SPEAKER_ID@.1" } ]
+    actions = { update-props = { session.suspend-timeout-seconds = 0, node.pause-on-idle = false } }
+  }
+]

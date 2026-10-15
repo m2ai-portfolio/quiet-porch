@@ -1,0 +1,143 @@
+{
+  "baseline": "487af6468c6672b7d20f0190c48c8b488e569fba",
+  "branch": "feat/quiet-porch-evidence",
+  "tests": 291,
+  "testFiles": 22,
+  "runtime": "synthetic-only",
+  "requirements": [
+    {
+      "id": "0",
+      "workstream": "Repository baseline",
+      "status": "Implemented",
+      "evidence": "Fresh branch feat/quiet-porch-evidence from refreshed main 487af64; original checkout/service preserved.",
+      "limits": "Production deployment not changed."
+    },
+    {
+      "id": "F1",
+      "workstream": "Live-view dwell",
+      "status": "Partial / blocked",
+      "evidence": "WHEP signaling, RTSPS endpoint, session renewal, timeout/stop, account binding, timestamp/freshness boundary and injected pipeline source have mock tests.",
+      "limits": "Authorized RTSPS/H.264 spike decoded 13 samples across 58.478 seconds; no trusted absolute capture-time metadata obtained. Production live decoding integration and freshness proof remain blocked."
+    },
+    {
+      "id": "F2",
+      "workstream": "Spoken deterrent",
+      "status": "Software implemented / physical proof blocked",
+      "evidence": "Speech selected; 10/20/40-second L2/L3/L4. Closed template, truthful notified claim, Polly PCM/WAV cache/fallback, finite Pi helper, durable actual-text record.",
+      "limits": "Polly requests, Pi helper installation, audible output and <3s latency unmeasured. Normal service remains dry run."
+    },
+    {
+      "id": "F3",
+      "workstream": "Morning report",
+      "status": "Implemented / validated synthetically",
+      "evidence": "Fixture-grounded report, completed outputs, unknown outcome count, no false healthy-silence wording.",
+      "limits": "Actual Alexa+ / real-night readback untested. Local simulated report path measured below 2s."
+    },
+    {
+      "id": "F4",
+      "workstream": "Expected-person window",
+      "status": "Implemented / validated",
+      "evidence": "Start closes active run immediately; cleanup tracked in idle; new wildlife output held; bounded person suppression, cancel/expiry/restart behavior tests.",
+      "limits": "All-zone person suppression remains a documented limitation. Cancel/expiry re-enable evaluation but never resume a cancelled incident."
+    },
+    {
+      "id": "F5",
+      "workstream": "Second household",
+      "status": "Software isolation implemented / real account blocked",
+      "evidence": "Explicit primaryAccountId; no arrival-order authority. Device/account binding; secondary no coordinator actions; scoped read-only MCP tools. Synthetic secondary scenario tested.",
+      "limits": "No consent/access/linking completed. Ring Playground unknown. Config without primaryAccountId is intentionally ledger-only."
+    },
+    {
+      "id": "F6",
+      "workstream": "Outdoor hardware",
+      "status": "Prepared / blocked",
+      "evidence": "Bounded valve plan and readback/reconcile tests preserved; exterior zone enforcement and safe cleanup; attended-test runbook. Matt selected physical zone A.",
+      "limits": "Front-yard zone A mapping confirmed by Matt. HA actuator entities report unavailable despite Tuya loaded. No physical output/shutoff test authorized or performed."
+    },
+    {
+      "id": "F7",
+      "workstream": "Wildlife beat",
+      "status": "Synthetic substitute prepared",
+      "evidence": "10.000-second labeled caption sequence and fixture-backed wildlife decision; rendered frame inspected at 9s.",
+      "limits": "No authentic wildlife or household footage. This is a text rehearsal asset, not final device demonstration."
+    },
+    {
+      "id": "F8",
+      "workstream": "Decision ledger",
+      "status": "Implemented / validated",
+      "evidence": "Unknown outcomes, precise two-empty-frame departure, per-level source/age, completed speech and action outcomes, filter/detail frontend.",
+      "limits": "Rendered layout and workflows now verified in Chromium desktop/Surface-sized/mobile viewports. Actual Surface hardware untested; legacy missing outcomes remain unknown."
+    },
+    {
+      "id": "F9",
+      "workstream": "Replay",
+      "status": "Implemented / validated synthetically",
+      "evidence": "Legacy and speech fixtures replay three times against intentional expectations; changed-fixture negative test retained.",
+      "limits": "Authorized real-night export/replay unperformed."
+    },
+    {
+      "id": "F10",
+      "workstream": "Friction and feedback",
+      "status": "Prepared",
+      "evidence": "Maintained log extracted into completeness/evidence JSON; missing request IDs preserved. Service-specific local feedback fields provided.",
+      "limits": "Historical traffic not independently remeasured. Team onboarding/opinion and official field refinements still needed."
+    },
+    {
+      "id": "F11",
+      "workstream": "Companion package",
+      "status": "Explicitly deferred",
+      "evidence": "No speculative separate package. Official open-source submission fields inspected; eligibility not certified.",
+      "limits": "Manager answer/current direction required to establish need."
+    },
+    {
+      "id": "F12",
+      "workstream": "Encryption guard",
+      "status": "Retained / validated",
+      "evidence": "Blind/no-JPEG/unknown/refresh tests retained; corrected encrypted wording on ledger-only rows.",
+      "limits": "No real encrypted-camera observation claimed."
+    },
+    {
+      "id": "14",
+      "workstream": "Demo and media",
+      "status": "Preproduction package prepared",
+      "evidence": "175.000-second English caption outline, 10-second wildlife sequence, captions, 3:2 SVG thumbnail/gallery and asset manifest. Burned synthetic labels; no music or third-party artwork.",
+      "limits": "Final Ring device/simulator footage, staged loiterer, consenting second household and team video cut not captured/published."
+    },
+    {
+      "id": "15",
+      "workstream": "Submission and claim review",
+      "status": "Local drafts prepared",
+      "evidence": "All seven story sections, tags/links/options, judging map, feedback and publication checklist. Official deadline verified.",
+      "limits": "No Devpost edit/submit/roster check, name/tagline change or eligibility certification. Watermark interpretation remains open."
+    },
+    {
+      "id": "16",
+      "workstream": "Interactive app / durable handoff",
+      "status": "Hosted / HTTP validated",
+      "evidence": "Synthetic-only LAN frontend at 10.0.0.46:3472; dedicated transient user service; persistent preferences/notes and derived ledger export; run/restart source kept in project.",
+      "limits": "15 Chromium rendered checks passed after delegated-thread CUA lacked a provider. Actual Surface and audible browser speech untested; CUA interactive connection remains absent."
+    }
+  ],
+  "browserValidation": {
+    "browser": "Chromium 153",
+    "checksPassed": 15,
+    "viewports": [
+      "desktop",
+      "Surface-sized",
+      "mobile"
+    ],
+    "actualSurfaceTested": false,
+    "audibleBrowserSpeechTested": false,
+    "interactiveCuaConnection": "still absent"
+  },
+  "authorizedDiscovery": {
+    "cameraDecodedSamples": 13,
+    "cameraTotalWallSeconds": 58.478,
+    "captureTimeProvenance": "unverified",
+    "haActuators": "unavailable",
+    "tuyaIntegration": "loaded",
+    "piSpeaker": "connected/default output",
+    "zoneA": "front-yard mapping confirmed",
+    "physicalOutputs": false
+  }
+}

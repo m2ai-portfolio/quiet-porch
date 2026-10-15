@@ -13,7 +13,9 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "demo": "node scripts/serve-demo.ts",
+    "build": "tsc --noEmit"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
@@ -23,5 +25,8 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.71.1",
     "vitest": "^3.2.7"
+  },
+  "dependencies": {
+    "@aws-sdk/client-polly": "^3.1150.0"
   }
 }

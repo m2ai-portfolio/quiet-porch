@@ -194,7 +194,8 @@
           if (d.dry_run) label('DRY RUN');
           if (!d.text_lines.length) {
             const p = document.createElement('pre');
-            p.textContent = 'No events. Silent all night.';
+            p.textContent =
+              'No recorded events. Delivery coverage is unverified; this does not prove a quiet night.';
             $('lines').appendChild(p);
           }
           for (const t of d.text_lines) {
@@ -204,7 +205,8 @@
             $('lines').appendChild(p);
           }
           const c = d.counts;
-          $('tally').textContent = `${c.events} events · ${c.silent} silent · ${c.handled} handled`;
+          $('tally').textContent =
+            `${c.events} events · ${c.silent} silent · ${c.handled} handled · ${c.unknown || 0} outcomes unknown`;
         } catch (e) {
           $('window').textContent =
             e instanceof TypeError

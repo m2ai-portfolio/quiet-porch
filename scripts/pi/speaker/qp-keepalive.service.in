@@ -1,0 +1,15 @@
+# Quiet Porch (QP-15, 2026-10-13): the Anker SoundCore mutes its amp on silence and needs ~2 s
+# to wake, clipping the start of every alert. This plays a 20 Hz tone at -40 dBFS (below what the
+# speaker reproduces) so the amp never sees silence. qp-stop only stops qp-audio-*; this is untouched.
+# Undo: systemctl --user disable --now qp-keepalive; rm this file and ~/quiet-porch/keepalive.
+[Unit]
+Description=Quiet Porch speaker keep-alive (inaudible 20 Hz)
+After=pipewire.service wireplumber.service
+
+[Service]
+ExecStart=/bin/sh -c "while :; do pw-play --target=bluez_output.@SPEAKER_MAC@ %h/quiet-porch/keepalive/keepalive-20hz.wav || sleep 5; done"
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

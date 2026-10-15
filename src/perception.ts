@@ -45,6 +45,8 @@ export function perceptionPrompt(evidenceId: string): string {
     ' "person_present": boolean,',
     ' "activity": short string,',
     ' "night_ir": boolean (true if the frame is a grayscale infrared night image)}',
+    'You may add voice_slots with place and clothing strings describing only neutral position and clothing.',
+    'Never include identities or protected characteristics; omit a slot when uncertain.',
     'List every person, animal and vehicle you can see, one entry each. Use an empty subjects',
     'array if there is nothing. Use "other" for an animal not in the list.',
   ].join('\n');

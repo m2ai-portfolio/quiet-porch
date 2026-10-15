@@ -10,7 +10,7 @@ import { logTime, type NightSpan } from './nightwindow.ts';
 import { SUBJECT_CLASSES } from './perception.ts';
 
 export type LedgerSource = 'clip' | 'live' | 'replay' | 'sandbox';
-export type LineKind = 'silent' | 'held' | 'expected' | 'blind' | 'handled';
+export type LineKind = 'silent' | 'held' | 'expected' | 'blind' | 'handled' | 'unknown';
 
 export interface LedgerAction {
   service: string;
@@ -21,6 +21,7 @@ export interface LedgerAction {
 }
 
 export interface LevelEntry {
+  source: LedgerSource;
   level: number;
   evidence_id: string | null; // the frame that earned this level
   done: { service: string; entity_id: string }[]; // what really completed on that frame (status "done")
@@ -56,6 +57,7 @@ export interface LedgerCounts {
   handled: number;
   expected: number;
   blind: number;
+  unknown: number;
   held: number; // a person or animal was judged actionable, but something held the porch back
 }
 
@@ -76,6 +78,7 @@ interface EventRow {
   dry_run: number | null;
   decided_at: number | null;
   capture_ts: number | null;
+  evidence_source: string | null;
   incident_id: number | null;
   outcome: string | null;
   level_after: number | null;
@@ -139,6 +142,8 @@ export function describeHeld(note: string | null): string {
     intruder_cooldown: 'held: cooldown after the last run, nothing acted',
     wildlife_cooldown: 'held: cooldown after the last run, nothing acted',
     stale_evidence: 'held: evidence too old, nothing acted',
+    ledger_only_household: 'held: ledger-only household, actuators disabled',
+    expected_window_active: 'held: owner window active, nothing acted',
   };
   return known[note ?? ''] ?? `held: ${(note ?? 'unknown').replace(/_/g, ' ')}, nothing acted`;
 }
@@ -149,7 +154,7 @@ export function describeExit(reason: string | null, status: string): string {
     return `stood down (${reason.slice(11).replace(/_/g, ' ')})`;
   if (reason.startsWith('expected:')) return `expected (${reason.slice(9)})`;
   const known: Record<string, string> = {
-    departure: 'next frame empty',
+    departure: 'two accepted frames empty',
     benign_reclassification: 'reclassified harmless',
     bad_evidence: 'evidence unclear three times',
     timeout: 'timed out',
@@ -176,7 +181,7 @@ function whatOf(perception: string | null, subtype: string | null, kind: string 
 }
 
 function spokenTextOf(intents: IntentRow[]): string | null {
-  for (const i of intents) {
+  for (const i of intents.filter((i) => i.status === 'done' || i.status === 'dry_run')) {
     try {
       const t = (JSON.parse(i.data) as { spoken_text?: unknown }).spoken_text;
       if (typeof t === 'string' && t) return t;
@@ -201,6 +206,7 @@ function levelEntries(rows: EventRow[]): LevelEntry[] {
     for (let l = top + 1; l <= lvl; l++) {
       out.push({
         level: l,
+        source: r.evidence_source === 'live' ? 'live' : 'clip',
         evidence_id: r.o_evidence,
         done: [],
         age_ms: ageOf(r.applied_at, r.o_capture),
@@ -215,7 +221,7 @@ function levelEntries(rows: EventRow[]): LevelEntry[] {
 export function buildLedger(
   db: DatabaseSync,
   span: Pick<NightSpan, 'from' | 'to'>,
-  opts: { source?: LedgerSource } = {},
+  opts: { source?: LedgerSource; accountId?: string; deviceIds?: string[] } = {},
 ): Ledger {
   const source = opts.source ?? 'clip';
   const rows = db
@@ -225,7 +231,7 @@ export function buildLedger(
          json_extract(e.payload, '$.data.attributes.sub_type') AS subtype,
          json_extract(e.payload, '$.data.attributes.source') AS device,
          d.kind AS kind, d.reason AS reason, d.perception AS perception, d.dry_run AS dry_run,
-         d.decided_at AS decided_at, ev.capture_ts AS capture_ts,
+         d.decided_at AS decided_at, ev.capture_ts AS capture_ts, ev.source AS evidence_source,
          o.incident_id AS incident_id, o.outcome AS outcome, o.level_after AS level_after,
          o.capture_ts AS o_capture, o.evidence_id AS o_evidence, o.applied_at AS applied_at, o.note AS note
        FROM events e
@@ -233,9 +239,20 @@ export function buildLedger(
        LEFT JOIN evidence ev ON ev.evidence_id = d.evidence_id
        LEFT JOIN event_outcomes o ON o.source_event_id = e.source_event_id
        WHERE e.type = 'motion_detected' AND ts BETWEEN ? AND ?
+         AND (? IS NULL OR json_extract(e.payload, '$.meta.account_id') = ?)
        ORDER BY ts, e.id`,
     )
-    .all(span.from, span.to) as unknown as EventRow[];
+    .all(
+      span.from,
+      span.to,
+      opts.accountId ?? null,
+      opts.accountId ?? null,
+    ) as unknown as EventRow[];
+  if (opts.deviceIds) {
+    const allowed = new Set(opts.deviceIds);
+    for (let i = rows.length - 1; i >= 0; i--)
+      if (!rows[i].device || !allowed.has(rows[i].device!)) rows.splice(i, 1);
+  }
 
   const byIncident = new Map<number, EventRow[]>();
   const lines: LedgerLine[] = [];
@@ -247,8 +264,18 @@ export function buildLedger(
     const expected = r.outcome === 'expected';
     const blind = r.reason === 'blind_encrypted';
     const held = r.outcome === 'not_opened';
+    const unknown =
+      r.outcome === null && (r.kind === null || r.kind === 'intruder' || r.kind === 'wildlife');
     lines.push({
-      kind: expected ? 'expected' : blind ? 'blind' : held ? 'held' : 'silent',
+      kind: unknown
+        ? 'unknown'
+        : expected
+          ? 'expected'
+          : blind
+            ? 'blind'
+            : held
+              ? 'held'
+              : 'silent',
       ts_ring: r.ts,
       device_id: r.device ?? '',
       subtype: r.subtype ?? 'unknown',
@@ -257,14 +284,18 @@ export function buildLedger(
       level: 0,
       levels: [],
       evidence_age_ms: ageOf(r.decided_at, r.capture_ts),
-      source,
+      source: opts.source ?? (r.evidence_source === 'live' ? 'live' : source),
       dry_run: r.dry_run !== 0,
       actions: [],
-      stop_reason: expected
-        ? `expected (${r.note ?? 'owner said so'}), ladder stayed at L0`
-        : held
-          ? describeHeld(r.note)
-          : describeSilent(r.kind, r.reason),
+      stop_reason: unknown
+        ? 'outcome unknown / not recorded'
+        : expected
+          ? `expected (${r.note ?? 'owner said so'}), ladder stayed at L0`
+          : blind
+            ? 'blind: camera video is encrypted'
+            : held
+              ? describeHeld(r.note)
+              : describeSilent(r.kind, r.reason),
       stopped_at: null,
       incident_id: null,
       profile: null,
@@ -290,7 +321,7 @@ export function buildLedger(
     // an incident that began before the window start still has its early levels, ages and outputs.
     const all = db
       .prepare(
-        'SELECT level_after, capture_ts AS o_capture, evidence_id AS o_evidence, applied_at FROM event_outcomes WHERE incident_id = ? ORDER BY capture_ts, applied_at',
+        'SELECT o.level_after, o.capture_ts AS o_capture, o.evidence_id AS o_evidence, o.applied_at, ev.source AS evidence_source FROM event_outcomes o LEFT JOIN evidence ev ON ev.evidence_id=o.evidence_id WHERE o.incident_id = ? ORDER BY o.capture_ts, o.applied_at',
       )
       .all(id) as unknown as EventRow[];
     const levels = levelEntries(all);
@@ -298,6 +329,7 @@ export function buildLedger(
     // A refused step (kill switch, stale evidence, audio cap) writes no intent, so it shows here
     // as a level with nothing done.
     for (const e of levels) {
+      if (opts.source) e.source = opts.source;
       e.done = intents
         .filter(
           (i) => i.status === 'done' && i.evidence_id !== null && i.evidence_id === e.evidence_id,
@@ -317,7 +349,7 @@ export function buildLedger(
       level,
       levels,
       evidence_age_ms: top ? top.age_ms : ageOf(last.applied_at, last.o_capture),
-      source,
+      source: opts.source ?? (first.evidence_source === 'live' ? 'live' : source),
       dry_run: first.dry_run !== 0,
       actions: intents.map((i) => ({
         service: i.service,
@@ -337,7 +369,8 @@ export function buildLedger(
 
   lines.sort((a, b) => a.ts_ring - b.ts_ring);
   const handled = lines.filter((l) => l.kind === 'handled').length;
-  const silent = lines.length - handled;
+  const unknown = lines.filter((l) => l.kind === 'unknown').length;
+  const silent = lines.length - handled - unknown;
   return {
     lines,
     counts: {
@@ -345,6 +378,7 @@ export function buildLedger(
       events: lines.length,
       silent,
       handled,
+      unknown,
       expected: lines.filter((l) => l.kind === 'expected').length,
       blind: lines.filter((l) => l.kind === 'blind').length,
       held: lines.filter((l) => l.kind === 'held').length,

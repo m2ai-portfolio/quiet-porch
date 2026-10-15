@@ -1,3 +1,4 @@
+import { composeLine, type LineSlots } from './voice.ts';
 // Coordinator (plan v7 section 7): one active incident, write-ahead intents, serialized
 // dispatch through the allowlist, stand-down and cleanup, reconcile, boot sweep, and the
 // wildlife/intruder preemption. Both profiles share it.
@@ -77,6 +78,7 @@ export const defaultClock: CoordClock = {
 
 // What the pipeline hands over for each decided event.
 export interface Evaluation {
+  source?: 'live' | 'clip';
   sourceEventId?: string; // Ring event id; ties the outcome to the night ledger
   zone: string;
   kind: DecisionKind;
@@ -85,6 +87,7 @@ export interface Evaluation {
   evidenceId?: string;
   captureTs?: number;
   frame?: Buffer;
+  voiceSlots?: LineSlots;
 }
 
 export interface CoordinatorDeps {
@@ -105,6 +108,7 @@ interface Ctx {
   zone: string;
   evidenceId?: string;
   frame?: Buffer;
+  voiceSlots?: LineSlots;
 }
 
 type CallOutcome = { ok: boolean; reason?: string };
@@ -151,6 +155,7 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
   let evalChain: Promise<void> = Promise.resolve();
   let actionChain: Promise<void> = Promise.resolve();
   let inFlight: Promise<unknown> | undefined;
+  let expectationCleanup: Promise<void> = Promise.resolve();
 
   const log = deps.log;
 
@@ -219,6 +224,20 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     return timedOut ? 'timeout' : (r as T);
   }
 
+  // One freshness rule for both paths: null when the incident's evidence is still the newest for
+  // its zone, not future-dated, and younger than maxEvidenceAgeMs; otherwise why it is stale.
+  // Actuator dispatch refuses stale evidence. A level notification is still sent, labelled with
+  // this reason (owner policy, 2026-10-13).
+  function evidenceStaleness(ctx: Ctx): string | null {
+    const newest = latest.get(ctx.zone);
+    if (!ctx.evidenceId) return 'no evidence attached';
+    if (newest?.evidenceId !== ctx.evidenceId) return 'superseded by newer evidence';
+    const age = clock.now() - newest.captureTs;
+    if (age < 0) return 'evidence time is in the future';
+    if (age >= ctx.maxEvidenceAgeMs) return `evidence ${Math.round(age / 1000)} s old`;
+    return null;
+  }
+
   // ---- the one path to an actuator ----
 
   async function dispatch(
@@ -227,7 +246,20 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     data: Record<string, unknown> | undefined,
     ctx: Ctx | null, // null: safety command outside an incident (boot sweep, reconcile, revert)
   ): Promise<CallOutcome> {
-    const check = checkAction(allowlist, { entity_id, service, data });
+    if (service === 'speak') {
+      const delivered = db
+        .prepare(
+          "SELECT 1 FROM action_intents WHERE incident_id=? AND service='notify' AND status='done' LIMIT 1",
+        )
+        .get(ctx?.incidentId ?? null);
+      const ownerNotified = Boolean(delivered);
+      const slots = { place: ctx?.zone.replace(/_/g, ' '), ...ctx?.voiceSlots };
+      data = {
+        spoken_text: composeLine(slots, { ownerNotified }).text,
+        owner_notified: ownerNotified,
+      };
+    }
+    const check = checkAction(allowlist, { entity_id, service, data, zone: ctx?.zone });
     if (!check.ok) {
       log({ event: 'call_rejected', entity_id, service, reason: check.reason });
       return { ok: false, reason: check.reason };
@@ -250,15 +282,8 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
       if (!inc || inc.status !== 'active' || inc.version !== ctx.version) {
         return refuse('incident_changed');
       }
-      const newest = latest.get(ctx.zone);
-      if (
-        !ctx.evidenceId ||
-        newest?.evidenceId !== ctx.evidenceId ||
-        clock.now() - newest.captureTs >= ctx.maxEvidenceAgeMs
-      ) {
-        return refuse('stale_evidence');
-      }
-      if (domainOf(entity_id) === 'pi_audio' && service === 'play_clip') {
+      if (evidenceStaleness(ctx) !== null) return refuse('stale_evidence');
+      if (domainOf(entity_id) === 'pi_audio' && (service === 'play_clip' || service === 'speak')) {
         const since = clock.now() - AUDIO_CAP.windowMs;
         while (audioPlays.length && audioPlays[0] < since) audioPlays.shift();
         if (audioPlays.length >= AUDIO_CAP.plays) return refuse('audio_rate_cap');
@@ -311,6 +336,16 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
       log({ event: 'call_failed', entity_id, service, intent_id: intentId, error: res.error });
       return { ok: false, reason: res.error };
     }
+    if (res.spokenText)
+      db.prepare("UPDATE action_intents SET data=? WHERE intent_id=? AND status='pending'").run(
+        JSON.stringify({
+          ...data,
+          spoken_text: res.spokenText,
+          fallback: res.fallback,
+          latency_ms: res.latencyMs,
+        }),
+        intentId,
+      );
     completeIntent(
       db,
       intentId,
@@ -338,18 +373,41 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     const service = CLEANUP_SERVICE[domain];
     if (!service) {
       log({ event: 'cleanup_no_service', entity_id: target });
+      // Notifications have no physical output to switch off. Unknown actuator domains do.
+      if (domain !== 'notification')
+        openReconcile(db, { entityId: target, incidentId, action: 'unavailable', reason: 'cleanup_service_unavailable' }, clock.now());
       return false;
     }
     const act = actuatorFor(actuators, target);
-    for (let i = 0; i < CLEANUP_TRIES; i++) {
-      await dispatch(target, service, undefined, null);
-      const state = await withDeadline(act.readState(target), CALL_DEADLINE_MS);
-      if (
-        state !== 'timeout' &&
-        state !== undefined &&
-        EXPECTED_AFTER_CLEANUP[domain]?.includes(state)
-      ) {
-        return true;
+    // HA cloud state may lag a successful close. Acknowledgement is not confirmation.
+    const confirmStart = clock.now();
+    const confirmUntil = confirmStart + CALL_DEADLINE_MS;
+    for (let i = 0; i < CLEANUP_TRIES && clock.now() < confirmUntil; i++) {
+      const sent = await withDeadline(
+        dispatch(target, service, undefined, null).catch(() => ({ ok: false, error: 'cleanup_command_failed' })),
+        Math.max(1, confirmUntil - clock.now()),
+      );
+      if (sent === 'timeout') break;
+      if (!sent.ok) {
+        await clock.sleep(Math.min(250, Math.max(0, confirmUntil - clock.now())));
+        continue;
+      }
+      // Reserve another attempt if an acknowledged close has no observed effect.
+      const pollUntil = Math.min(confirmUntil, confirmStart + ((i + 1) * CALL_DEADLINE_MS) / CLEANUP_TRIES);
+      while (clock.now() < pollUntil) {
+        const state = await withDeadline(
+          act.readState(target).catch(() => undefined),
+          Math.max(1, pollUntil - clock.now()),
+        );
+        if (
+          state !== 'timeout' &&
+          state !== undefined &&
+          EXPECTED_AFTER_CLEANUP[domain]?.includes(state)
+        ) {
+          log({ event: 'cleanup_confirmed', entity_id: target, incident_id: incidentId });
+          return true;
+        }
+        await clock.sleep(Math.min(250, Math.max(0, pollUntil - clock.now())));
       }
     }
     openReconcile(
@@ -383,11 +441,36 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     }
   }
 
-  async function notify(incidentId: number, text: string, frame?: Buffer) {
+  async function notify(incidentId: number, text: string, frame?: Buffer, evidenceId?: string) {
+    const intentId = randomUUID();
+    recordIntent(
+      db,
+      {
+        intentId,
+        incidentId,
+        entityId: 'notification.owner',
+        service: 'notify',
+        cls: 'escalation',
+        evidenceId,
+      },
+      clock.now(),
+    );
     try {
-      await actuators.notifier.send({ incidentId, text, frame, stopUrl: deps.stopUrl(incidentId) });
-    } catch (e) {
-      log({ event: 'notify_failed', incident_id: incidentId, error: (e as Error).message });
+      const result = await withDeadline(
+        actuators.notifier.send({ incidentId, text, frame, stopUrl: deps.stopUrl(incidentId) }),
+        CALL_DEADLINE_MS,
+      );
+      completeIntent(
+        db,
+        intentId,
+        result === 'timeout' ? 'unknown' : actuators.live ? 'done' : 'dry_run',
+        result === 'timeout' ? 'timeout' : 'notification_completed',
+        undefined,
+        clock.now(),
+      );
+    } catch {
+      completeIntent(db, intentId, 'failed', 'notification_failed', undefined, clock.now());
+      log({ event: 'notify_failed', incident_id: incidentId });
     }
   }
 
@@ -433,7 +516,12 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     if (s.kind === 'notify') {
       const inc = incidentById(ctx.incidentId);
       if (!inc || inc.status !== 'active' || inc.version !== ctx.version) return;
-      return notify(ctx.incidentId, s.text, ctx.frame);
+      const stale = evidenceStaleness(ctx);
+      if (stale !== null) {
+        log({ event: 'notify_stale_labelled', reason: stale, incident_id: ctx.incidentId });
+        return notify(ctx.incidentId, `${s.text} (stale: ${stale})`, ctx.frame, ctx.evidenceId);
+      }
+      return notify(ctx.incidentId, s.text, ctx.frame, ctx.evidenceId);
     }
     if (s.kind === 'call') {
       const r = await dispatch(s.entity_id, s.service, s.data, ctx);
@@ -533,11 +621,12 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     if (r.exit) return endIncident(inc.id, 'exited', r.exit);
     const ctx: Ctx = {
       incidentId: inc.id,
-      maxEvidenceAgeMs: MAX_EVIDENCE_AGE_MS,
+      maxEvidenceAgeMs: ev.source === 'live' ? 6000 : MAX_EVIDENCE_AGE_MS,
       version: inc.version,
       zone: inc.zone,
       evidenceId: ev.evidenceId,
       frame: ev.frame,
+      voiceSlots: ev.voiceSlots,
     };
     for (const level of r.enter) {
       const plan = intruderPlan(level, inc.zone, cfg.actuators);
@@ -561,11 +650,13 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     outcome(ev, { kind: 'incident', incidentId: id, note: ev.reason });
     void enqueue(plan.steps, {
       incidentId: id,
-      maxEvidenceAgeMs: cfg.wildlifeMaxEvidenceAgeMs + WILDLIFE_STEP_BUDGET_MS,
+      maxEvidenceAgeMs:
+        ev.source === 'live' ? 6000 : cfg.wildlifeMaxEvidenceAgeMs + WILDLIFE_STEP_BUDGET_MS,
       version: inc.version,
       zone: ev.zone,
       evidenceId: ev.evidenceId,
       frame: ev.frame,
+      voiceSlots: ev.voiceSlots,
     });
   }
 
@@ -689,6 +780,10 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
         outcome(ev, { kind: 'not_opened', note: 'wildlife_cooldown' });
         return log({ event: 'not_opened', reason: 'wildlife_cooldown', zone: ev.zone });
       }
+      if (activeExpectation(db, clock.now())) {
+        outcome(ev, { kind: 'not_opened', note: 'expected_window_active' });
+        return;
+      }
       if (ev.captureTs === undefined || clock.now() - ev.captureTs > cfg.wildlifeMaxEvidenceAgeMs) {
         outcome(ev, { kind: 'not_opened', note: 'stale_evidence' });
         return log({ event: 'not_opened', reason: 'stale_evidence', zone: ev.zone });
@@ -716,7 +811,13 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
   }
 
   function onEvaluation(ev: Evaluation): Promise<void> {
-    const run = evalChain.then(() => onEvaluationInner(ev));
+    const run = evalChain.then(async () => {
+      // Cancelling an expected window does not cancel its safety cleanup. Keep the old
+      // incident's outputs reserved until cleanup finishes; unresolved outputs remain
+      // inhibited by reconciliation before a new incident can dispatch to them.
+      await expectationCleanup;
+      return onEvaluationInner(ev);
+    });
     evalChain = run.catch((e) => log({ event: 'evaluation_failed', error: (e as Error).message }));
     return run;
   }
@@ -736,6 +837,11 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
       { personLabel, minutes: minutes ?? EXPECT_DEFAULT_MINUTES, createdBy: by },
       clock.now(),
     );
+    const inc = activeIncident(db);
+    if (inc)
+      expectationCleanup = endIncident(inc.id, 'cancelled', `expected:${personLabel}`, {
+        cooldown: inc.profile === 'wildlife',
+      }).catch(() => log({ event: 'expectation_cleanup_failed', incident_id: inc.id }));
     log({ event: 'expect_me', person: personLabel, until: e.expires_at, by });
     return e;
   }
@@ -849,7 +955,18 @@ export function createCoordinator(cfg: CoordinatorConfig, deps: CoordinatorDeps)
     clearReconcile,
     expectMe,
     cancelExpectation,
-    idle: () => Promise.all([evalChain, actionChain]).then(() => undefined),
+    idle: async () => {
+      // Evaluations released by cleanup can append actions after idle was called.
+      // Drain those dependencies too before reporting quiescence (including replay).
+      for (;;) {
+        const evaluations = evalChain;
+        const actions = actionChain;
+        const cleanup = expectationCleanup;
+        await Promise.all([evaluations, actions, cleanup]);
+        if (evaluations === evalChain && actions === actionChain && cleanup === expectationCleanup)
+          return;
+      }
+    },
   };
 }
 
@@ -866,6 +983,7 @@ export interface CoordinatorSection {
   interiorLights: string[];
   zones: ActuatorConfig['zones'];
   clips: ActuatorConfig['clips'];
+  audioMode?: 'bark' | 'speech';
 }
 
 export function parseCoordinatorSection(
@@ -899,7 +1017,12 @@ export function parseCoordinatorSection(
     }
   }
   for (const [zone, z] of Object.entries(c.zones ?? {})) {
-    for (const [k, id] of Object.entries(z)) if (id) known(id, `zones.${zone}.${k}`);
+    for (const [k, id] of Object.entries(z)) {
+      if (!id) continue;
+      const rule = known(id, `zones.${zone}.${k}`);
+      if (rule.placement !== 'exterior' || !rule.zones.includes(zone))
+        throw new Error(`coordinator config: ${id} not allowed in zone ${zone}`);
+    }
     if (z.durationSetter && allowlist.entities.get(z.durationSetter)?.cleanup_via !== z.valve) {
       throw new Error(
         `coordinator config: zones.${zone} durationSetter must clean up via its valve`,
@@ -907,8 +1030,15 @@ export function parseCoordinatorSection(
     }
   }
   if (!c.clips?.bark || !c.clips?.wildlife) throw new Error('coordinator config: clips missing');
+  if (c.audioMode !== undefined && !['bark', 'speech'].includes(c.audioMode))
+    throw new Error('invalid audioMode');
   return {
-    actuators: { interiorLights: c.interiorLights ?? [], zones: c.zones ?? {}, clips: c.clips },
+    actuators: {
+      audioMode: c.audioMode ?? 'speech',
+      interiorLights: c.interiorLights ?? [],
+      zones: c.zones ?? {},
+      clips: c.clips,
+    },
     mode,
     maxIntruderLevel: c.maxIntruderLevel!,
     cooldownMs: c.cooldownMs!,

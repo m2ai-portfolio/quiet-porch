@@ -4,7 +4,7 @@ An AI home deterrent for the Amazon Developer Hackathon (Build, Ship, Shape, 202
 Alexa+ tracks, with Amazon Bedrock for the AWS Builder mini-challenge.
 
 A Ring motion event becomes a judged, logged decision. A person who is still there at night
-gets a calm, escalating response (interior lights, then exterior light, a short bark clip, a
+gets a calm, escalating response (interior lights, then a descriptive spoken line, then a
 sprinkler), and an armadillo in the yard gets the sprinkler. Benign events (deliveries, cars,
 pets) get no action at all. Every decision is logged with its frame and timestamps, and an
 owner can stand everything down from a signed Stop link or by asking Alexa.
@@ -15,7 +15,7 @@ owner can stand everything down from a signed Stop link or by asking Alexa.
 Ring webhook (signed)
    |
    v
-server.ts  -- verify HMAC, dedupe, log
+server.ts: verify HMAC, dedupe, log
    |
    v
 pipeline.ts
@@ -25,13 +25,14 @@ pipeline.ts
    decide.ts      deterministic profile: log / intruder / wildlife / reject (stale, no evidence)
    |
    v
-coordinator.ts  -- one active incident, write-ahead intents, cooldowns, cleanup, reconcile
-   ladder.ts      L1 interior lights + notify, L2 exterior light, L3 bark clip, L4 sprinkler
+coordinator.ts: one active incident, write-ahead intents, cooldowns, cleanup, reconcile
+   ladder.ts      L1 interior lights + notify, L2 exterior light (skipped when none is configured;
+                  zone A has none), L3 descriptive speech, L4 sprinkler
    allowlist.ts   every Home Assistant call checked; locks, covers and alarms are never allowed
    actuators.ts   Home Assistant REST, Pi speaker, Telegram (or a dry-run simulator)
    |
    v
-mcp.ts  -- status-mcp, MCP 2025-11-25 over Streamable HTTP, for Alexa+:
+mcp.ts: status-mcp, MCP 2025-11-25 over Streamable HTTP, for Alexa+:
            get_incident_status, list_recent_incidents, get_night_report, get_ledger,
            expect_me, stand_down, set_mode, clear_reconcile
 ```
@@ -43,7 +44,17 @@ ladder are deterministic code, and escalation needs fresh evidence (stale frames
 
 Running live in **dry run**: real Ring events and real Bedrock calls, but every actuator call is
 simulated and logged. See [`docs/recon.md`](docs/recon.md) for measured results and
-[`docs/plan-v7.md`](docs/plan-v7.md) for the plan and its gates.
+[`docs/plan-v7.md`](docs/plan-v7.md) for the plan and its gates. The validation record, with a
+source label on every result, is [`docs/delivery/validation.txt`](docs/delivery/validation.txt).
+
+Not yet verified:
+
+- trusted camera capture timestamps for live view (the live decoder and capture-time mapping are
+  unvalidated, so incidents use the recorded event clip);
+- real Ring-event-to-audio latency (only component timings are measured, listed below);
+- app-driven sprinkler operation, the 30-second valve self-shutoff and recovery;
+- a second household;
+- final footage and the demo video.
 
 ## Run
 
@@ -85,19 +96,19 @@ What exists today is stated as such, and what does not exist yet is listed after
   uses no faces. _Not yet:_ a second connected household shown next to the first.
 - **Quality of the Idea.** A deterrent judged by its silence: deterministic code escalates only on
   fresh evidence and the model never acts. The line the porch speaks comes from a fixed template
-  and a closed vocabulary (`src/voice.ts`). _Not yet:_ spoken playback (the composer exists behind a
-  stub).
+  and a closed vocabulary (`src/voice.ts`). _Speech verified in part:_ Polly synthesized four
+  approved lines into a private ProBook cache on 2026-10-13, and Pi playback was heard from a Bluetooth speaker in an
+  attended test. Ring-event-to-audio latency is unmeasured, and the service still runs dry run.
 
 ## The night ledger
 
 Silence is the product, and the ledger proves it. Every motion event of the armed night is one
 line with the Ring capture time, what the camera saw, the level reached, the age of the frame the
 level was earned on, the frame source (`clip` today, `replay` for a fixture; `live` and `sandbox` are reserved for live view and the Playground) and why it stopped. A
-lingering person is one line for the whole incident, with the age at every level, so "14 events,
-13 silent, 1 handled" is arithmetic: events = silent + handled.
+lingering person is one line for the whole incident, with the age at every level, with known no-action, handled and unknown counts. Missing historical actionable outcomes are unknown, so events = known no-action + handled + unknown. Counts shown in the rehearsal are fixture-derived, not a real-night claim.
 
 ```
-02:14:07 · person · side gate · L3 (clip) · evidence age 4 s · source clip · stopped: next frame empty 02:14:31
+02:14:07 · person · side gate · L3 (clip) · evidence age 4 s · source clip · stopped: two accepted frames empty 02:14:31
 ```
 
 - **Morning report.** `get_night_report` (status-mcp, read token) answers "what happened last
@@ -121,9 +132,25 @@ lingering person is one line for the whole incident, with the age at every level
   `test/fixtures/synthetic-night.json` is a hand-built night, labelled synthetic.
   `node scripts/export-fixture.ts` turns a real night from the state directory into a fixture
   outside the repository and prints how the replay differs from the original.
-- **Spoken line (proposal, not wired).** `src/voice.ts` composes one line from a fixed template
-  and a closed vocabulary. Nothing plays it; the ladder still plays its bark clip. Whether L3
-  speaks is a team decision.
+- **Spoken line (selected; dry run).** Matt selected descriptive speech at 20 seconds and the sprinkler at 40 seconds; the 10-second exterior-light step is skipped because zone A has none. `src/voice.ts` composes a fixed, closed-vocabulary line. `src/speech.ts` adds finite Polly PCM/WAV synthesis, cached fallback and failure reporting; `qp-speak` is the Pi integration helper.
+  On 2026-10-13 Polly (voice Ruth, generative engine, us-east-1) synthesized four approved lines
+  into a private ProBook cache in 476 to 880 ms per line. With the provider forced to fail, cached
+  lines were served and uncached lines fell back to the matching cached truthful line. Pi playback
+  was verified in an attended test on 2026-10-13. A Raspberry Pi drove an Anker
+  SoundCore Bluetooth speaker through the same Pi speech player the app uses (`createPiSpeechPlayer`
+  and `qp-speak`). Matt, standing at the speaker, heard the full spoken line after 2 minutes of
+  idle. The Pi began playback 865 ms after dispatch from ProBook
+  (one recorded run; time until the sound was heard was not measured separately). That test drove the Pi adapters
+  directly, not a live coordinator run from a Ring event. Stop was verified on the same hardware. A
+  7-second wildlife clip was cut at about 3 s, `qp-stop` returned in 480 ms, a play request dated
+  before the Stop was refused and silent, and a 5-second bark clip ran to its natural end with no
+  playback process left behind. Both clips are original ElevenLabs sound effects, with no
+  copyrighted music. Before the fix in `scripts/pi/qp-speaker-setup`, the Bluetooth speaker lost
+  the start of every clip: PipeWire took about 7 s to resume its suspended sink, and the
+  speaker took about 2 s to wake its amp after silence. The script installs a WirePlumber rule
+  (A2DP pinned, no suspend) and an inaudible 20 Hz keep-alive tone at -40 dBFS. The timings
+  above are components (Polly synthesis, Pi dispatch, Stop), not Ring-event-to-audio latency.
+  The normal service remains dry run. Legacy fixtures retain explicit bark mode.
 
 Events that were judged actionable but held back (kill switch, cooldown, old evidence) show as
 `held`, never as silent; a camera Ring encrypts shows as `blind`. The morning report never claims
@@ -135,3 +162,29 @@ Measured frictions with the Ring API, Bedrock and MCP are in
 ## License
 
 MIT
+
+## Isolated evidence rehearsal
+
+`npm run demo -- --host 0.0.0.0 --port 3472` serves a synthetic-only app with ledger details,
+report, simulated Stop and expected-window controls, and durable notes. Open
+http://10.0.0.46:3472 on ProBook's LAN (recheck the address after network changes).
+No external service or physical device calls occur in this app. Sources and generated assets
+live in this repo; preferences/exports persist under `state/rehearsal`.
+
+See [coverage report](docs/delivery/coverage.html), [runbook](docs/delivery/runbook.md),
+[submission draft](docs/delivery/submission.html), and [live-view spike limits](docs/delivery/live-view-spike.md).
+The normal server still rejects non-dry-run config; the old service/checkout was preserved.
+
+New configured household access requires an explicit `primaryAccountId` in pipeline config.
+Without it, all households are ledger-only; arrival order does not grant actuator authority.
+Secondary surfaces require `accountId` plus `readOnlyHousehold: true` and expose only scoped
+ledger/report tools. No second account was linked by this work. Exterior escalation must match
+the incident zone; Stop/close cleanup remains available after context loss.
+
+Live-source signing/session/provenance boundaries are tested, but a real WHEP/RTSPS decoder
+and trusted absolute capture-time mapping remain open. Locally received stream frames are
+not accepted as timestamp proof. Cam1 is battery powered; session limit is 30 seconds.
+Physical zone A is Matt's selected sprinkler deterrent, mapped to `valve.rf_water_timer_valve_1`
+with duration setter `number.rf_water_timer_irrigation_duration_1` (confirmed by a timed tag test
+in Home Assistant). App-driven valve actuation, the 30-second self-shutoff and recovery are
+unverified. The exterior light was dropped, and zone A has none. Two-empty-frame departure and multiple-notification policy remain in place.

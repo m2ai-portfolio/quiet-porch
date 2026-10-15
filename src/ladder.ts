@@ -8,7 +8,7 @@ export const DWELL_GAP_MS = 10_000; // a gap over this between valid frames rese
 export const GLOBAL_TIMEOUT_MS = 5 * 60_000;
 export const BAD_EVIDENCE_EXIT = 3;
 export const DEPARTURE_FRAMES = 2;
-export const LEVEL_DWELL_MS = [0, 0, 20_000, 40_000, 60_000]; // index = level
+export const LEVEL_DWELL_MS = [0, 0, 10_000, 20_000, 40_000]; // index = level
 
 export interface LadderState {
   level: number;
@@ -117,6 +117,7 @@ export interface ActuatorConfig {
   interiorLights: string[];
   zones: Record<string, ZoneActuators>;
   clips: { bark: string; wildlife: string };
+  audioMode?: 'bark' | 'speech';
 }
 
 export const VALVE_SECONDS = 30;
@@ -182,8 +183,8 @@ export function intruderPlan(level: number, zone: string, cfg: ActuatorConfig): 
       steps.push({
         kind: 'call',
         entity_id: z.speaker,
-        service: 'play_clip',
-        data: { clip: cfg.clips.bark },
+        service: cfg.audioMode !== 'bark' ? 'speak' : 'play_clip',
+        data: cfg.audioMode !== 'bark' ? {} : { clip: cfg.clips.bark },
       });
     } else skipped.push('speaker');
   } else if (level === 4) {

@@ -1,3 +1,5 @@
+import { ingestionHealth } from './ingestion-health.ts';
+import { primaryHousehold } from './household.ts';
 // Quiet Porch Ring endpoints, served on 127.0.0.1 and exposed through Tailscale Funnel at /ring.
 //
 // One-way account linking (Ring docs, section 6):
@@ -258,9 +260,20 @@ export function createApp(cfg: Config) {
     }
     const r = await coordinator.standDown(check.incidentId, 'stop_link');
     log(`stop: incident ${check.incidentId} ${r}`);
-    return r === 'stopped'
-      ? html(200, 'Stopped', 'Everything Quiet Porch turned on has been turned off.')
-      : html(200, 'Nothing to stop', 'That incident had already ended.');
+    if (r !== 'stopped')
+      return html(200, 'Nothing to stop', 'That incident had already ended.');
+    const pending = db.prepare(
+      'SELECT 1 FROM reconcile WHERE resolved_at IS NULL LIMIT 1',
+    ).get();
+    const dryRun = cfg.pipeline?.config.dryRun === true;
+    const message = pending
+      ? dryRun
+        ? 'Dry run: the incident is stood down, but simulated output closure is still unconfirmed. This reflects system-wide unresolved cleanup. No physical outputs were operated.'
+        : 'The incident is stood down, but output closure is still unconfirmed. This reflects system-wide unresolved cleanup. Check the affected outputs and use manual shutoff if needed.'
+      : dryRun
+        ? 'Dry run: the incident is stood down and simulated output cleanup is confirmed. No physical outputs were operated.'
+        : 'The incident is stood down and output cleanup is confirmed.';
+    return html(200, pending ? 'Stopped; cleanup unconfirmed' : 'Stopped', message);
   }
 
   async function onTokenExchange(code: string): Promise<void> {
@@ -489,6 +502,8 @@ export function createApp(cfg: Config) {
           mode: modeStore,
           killed: () => existsSync(join(cfg.stateDir, 'KILL')),
           dryRun: cfg.pipeline!.config.dryRun,
+          accountScope: () => cfg.pipeline!.config.primaryAccountId ?? primaryHousehold(db!),
+          ingestionHealth: () => ingestionHealth(db!, Date.now(), primaryHousehold(db!)),
           standDown: (id, by) => coordinator!.standDown(id, by),
           clearReconcile: (row, user) => coordinator!.clearReconcile(row, user),
           expectMe: (label, minutes, by) => coordinator!.expectMe(label, minutes, by),

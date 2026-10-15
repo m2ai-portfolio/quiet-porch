@@ -36,12 +36,12 @@ function run(frames: FrameEval[], mode: Mode = 'night', maxLevel = 4) {
 const every5s = (until: number) => Array.from({ length: until / 5 + 1 }, (_, i) => person(i * 5));
 
 describe('intruder ladder: order and dwell timing', () => {
-  it('a staged loiterer at night climbs L1 at 0 s, L2 at 20 s, L3 at 40 s, L4 at 60 s', () => {
+  it('a staged loiterer at night climbs L1 at 0 s, L2 at 10 s, L3 at 20 s, L4 at 40 s', () => {
     expect(run(every5s(65)).entered).toEqual([
       [1, 0],
-      [2, 20],
-      [3, 40],
-      [4, 60],
+      [2, 10],
+      [3, 20],
+      [4, 40],
     ]);
   });
 
@@ -57,19 +57,22 @@ describe('intruder ladder: order and dwell timing', () => {
   it('a 12 s gap resets dwell but holds the level', () => {
     const { s, entered } = run([person(0), person(5), person(15), person(27), person(32)]);
     // 0..15 is continuous (dwell 15 s, L1); the 12 s gap restarts dwell at 27.
-    expect(entered).toEqual([[1, 0]]);
-    expect(s.level).toBe(1);
+    expect(entered).toEqual([
+      [1, 0],
+      [2, 15],
+    ]);
+    expect(s.level).toBe(2);
     expect(s.dwellStartMs).toBe(T0 + 27_000);
   });
 
-  it('a loiterer leaving at 15 s exits before L2; at 30 s reaches L2 and exits before L3', () => {
-    const at15 = run([...every5s(15), empty(20), empty(25)]);
+  it('a loiterer leaving at 5 s exits before L2; at 15 s reaches L2 and exits before L3', () => {
+    const at15 = run([...every5s(5), empty(10), empty(15)]);
     expect(at15.entered).toEqual([[1, 0]]);
     expect(at15.exit).toBe('departure');
-    const at30 = run([...every5s(30), empty(35), empty(40)]);
+    const at30 = run([...every5s(15), empty(20), empty(25)]);
     expect(at30.entered).toEqual([
       [1, 0],
-      [2, 20],
+      [2, 10],
     ]);
     expect(at30.exit).toBe('departure');
   });
@@ -82,10 +85,10 @@ describe('intruder ladder: order and dwell timing', () => {
 
   it('bad evidence holds the level and three in a row exit', () => {
     const bad: FrameEval = { kind: 'bad', reason: 'stale' };
-    const held = run([...every5s(25), bad, bad]);
+    const held = run([...every5s(15), bad, bad]);
     expect(held.s.level).toBe(2);
     expect(held.exit).toBeUndefined();
-    expect(run([...every5s(25), bad, bad, bad]).exit).toBe('bad_evidence');
+    expect(run([...every5s(15), bad, bad, bad]).exit).toBe('bad_evidence');
   });
 
   it('benign reclassification exits', () => {
@@ -97,7 +100,10 @@ describe('intruder ladder: order and dwell timing', () => {
   it('a late frame older than the last accepted one is ignored', () => {
     const { s, entered } = run([person(0), person(10), person(5)]);
     expect(s.lastFrameMs).toBe(T0 + 10_000);
-    expect(entered).toEqual([[1, 0]]);
+    expect(entered).toEqual([
+      [1, 0],
+      [2, 10],
+    ]);
   });
 
   it('global timeout exits after 5 min whatever the frames say', () => {
@@ -115,12 +121,13 @@ const cfg: ActuatorConfig = {
   zones: {
     front_yard: {
       exteriorLight: 'switch.patio_light_socket_1',
-      valve: 'valve.front_yard_sprinkler_valve',
-      durationSetter: 'number.front_yard_sprinkler_irrigation_duration',
+      valve: 'valve.rf_water_timer_valve_1',
+      durationSetter: 'number.rf_water_timer_irrigation_duration_1',
       speaker: 'pi_audio.porch_speaker',
     },
   },
   clips: { bark: 'bark-5s', wildlife: 'wildlife' },
+  audioMode: 'bark',
 };
 
 describe('action plans', () => {
@@ -138,8 +145,8 @@ describe('action plans', () => {
     });
     expect(intruderPlan(4, 'front_yard', cfg).steps[0]).toEqual({
       kind: 'valve_run',
-      setter: 'number.front_yard_sprinkler_irrigation_duration',
-      valve: 'valve.front_yard_sprinkler_valve',
+      setter: 'number.rf_water_timer_irrigation_duration_1',
+      valve: 'valve.rf_water_timer_valve_1',
       seconds: 30,
     });
   });

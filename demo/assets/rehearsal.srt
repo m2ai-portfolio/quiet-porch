@@ -1,0 +1,23 @@
+1
+00:00:00,000 --> 00:00:15,000
+Five synthetic ledger lines. Three no-action decisions. Two handled simulations.
+
+2
+00:00:15,000 --> 00:00:40,000
+Quiet Porch separates what the model sees from what the code decides. This rehearsal uses hand-built fixtures, not household observations.
+
+3
+00:00:40,000 --> 00:01:30,000
+Selected escalation: exterior light at 10 seconds, descriptive speech at 20 seconds, bounded valve plan at 40 seconds. All calls here are simulated. Two accepted empty frames stop.
+
+4
+00:01:30,000 --> 00:02:15,000
+Open the interactive ledger to inspect timestamps, evidence ages and action outcomes. Unknown historical outcomes are not called silent. A second synthetic household is ledger-only.
+
+5
+00:02:15,000 --> 00:02:40,000
+Live capture-time provenance, actual Pi playback, physical zone A mapping and outdoor validation remain open. A real Ring device or simulator demonstration still needs authorized capture.
+
+6
+00:02:40,000 --> 00:02:55,000
+Quiet Porch. Mostly quiet, with a record. Tech Implementation. Design. Potential Impact. Quality of the Idea. Local rehearsal only; not submission-ready footage.

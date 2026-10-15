@@ -156,7 +156,17 @@ describe('status-mcp over Streamable HTTP', () => {
     const id = openIncident(db, 'front_yard', 'intruder', 1)!;
     const s = await call('stand_down', {}, tokens.owner);
     expect(standDown).toHaveBeenCalledWith(id, 'mcp');
-    expect(s.body.result.content[0].text).toBe('Done. Everything has been turned off.');
+    expect(s.body.result.content[0].text).toContain('Dry run:');
+    expect(s.body.result.content[0].text).toContain('simulated output cleanup is confirmed');
+    expect(s.body.result.content[0].text).toContain('No physical outputs were operated.');
+    expect(s.body.result.structuredContent).toMatchObject({
+      result: 'stopped',
+      cleanup_status: 'confirmed',
+      dry_run: true,
+      cleanup_basis: 'simulated_readback',
+      cleanup_scope: 'system',
+      pending_entities: [],
+    });
     const m = await call('set_mode', { mode: 'away' }, tokens.owner);
     expect(m.body.result.content[0].text).toBe('Mode set to away.');
     expect(mode.get()).toBe('away');

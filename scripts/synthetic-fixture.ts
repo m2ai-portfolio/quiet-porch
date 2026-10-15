@@ -82,6 +82,7 @@ export function syntheticNight(): Fixture {
     synthetic: true,
     mode: 'away',
     config: {
+      primaryAccountId: 'acct-synthetic',
       timezone: 'America/Chicago',
       nightWindow: { start: '20:00', end: '06:30' },
       zones: { [DEVICE]: 'front_yard' },
@@ -94,17 +95,18 @@ export function syntheticNight(): Fixture {
       },
       followUpProbe: false,
       coordinator: {
+        audioMode: 'bark',
         allowlist: 'inline',
         publicBase: 'https://quiet-porch.example.invalid/ring',
         maxIntruderLevel: 4,
         cooldownMs: 600_000,
         ownerUserIds: ['mcp:owner'],
-        interiorLights: ['light.worklights'],
+        interiorLights: ['light.worklight_1'],
         zones: {
           front_yard: {
             exteriorLight: 'switch.patio_light_socket_1',
-            valve: 'valve.front_yard_sprinkler_valve',
-            durationSetter: 'number.front_yard_sprinkler_irrigation_duration',
+            valve: 'valve.rf_water_timer_valve_1',
+            durationSetter: 'number.rf_water_timer_irrigation_duration_1',
             speaker: 'pi_audio.porch_speaker',
           },
         },

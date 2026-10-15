@@ -16,7 +16,7 @@ import { dirname, resolve, sep } from 'node:path';
 import { createDryRunActuators } from './actuators.ts';
 import { parseAllowlist } from './allowlist.ts';
 import type { ContentBlock } from './bedrock.ts';
-import { createCoordinator, parseCoordinatorSection } from './coordinator.ts';
+import { createCoordinator, parseCoordinatorSection, type Coordinator } from './coordinator.ts';
 import { openDb } from './db.ts';
 import { parseMotionEvent, type Download } from './frames.ts';
 import type { Mode } from './ladder.ts';
@@ -59,6 +59,7 @@ export interface ReplayResult {
   ledger: Ledger;
   lines: string[];
   timezone: string;
+  coordinator?: Coordinator; // dry-run only, available with keepDb
   db?: DatabaseSync; // only with keepDb; the caller closes it
   endedAt: number; // virtual time when the replay finished
 }
@@ -282,7 +283,7 @@ export async function runReplay(
     lines: formatLedger(ledger.lines, cfg.timezone),
     timezone: cfg.timezone,
     endedAt: vc.now(),
-    ...(opts.keepDb ? { db } : {}),
+    ...(opts.keepDb ? { db, coordinator } : {}),
   };
 }
 

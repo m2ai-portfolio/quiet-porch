@@ -90,7 +90,7 @@ describe('night tools over Streamable HTTP', () => {
     expect(d.lines).toHaveLength(5);
     expect(d.text_lines.filter((l: string) => /^\d\d:\d\d:\d\d/.test(l))).toHaveLength(5);
     expect(d.text_lines.join('\n')).toContain('source replay');
-    expect(d.text_lines.join('\n')).toContain('stopped: next frame empty');
+    expect(d.text_lines.join('\n')).toContain('stopped: two accepted frames empty');
   });
 
   it('the read token cannot start an expected window; the owner can', async () => {

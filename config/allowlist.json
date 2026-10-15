@@ -1,38 +1,63 @@
 {
   "entities": [
     {
-      "entity_id": "valve.front_yard_sprinkler_valve",
+      "entity_id": "valve.rf_water_timer_valve_1",
       "placement": "exterior",
       "zones": ["front_yard"],
-      "services": { "open_valve": {}, "close_valve": {} }
+      "services": {
+        "open_valve": {},
+        "close_valve": {}
+      }
     },
     {
-      "entity_id": "number.front_yard_sprinkler_irrigation_duration",
+      "entity_id": "number.rf_water_timer_irrigation_duration_1",
       "placement": "exterior",
       "zones": ["front_yard"],
-      "services": { "set_value": { "params": { "value": { "min": 5, "max": 30 } } } },
-      "cleanup_via": "valve.front_yard_sprinkler_valve"
-    },
-    {
-      "entity_id": "switch.patio_light_socket_1",
-      "placement": "exterior",
-      "zones": ["front_yard"],
-      "services": { "turn_on": {}, "turn_off": {} }
+      "services": {
+        "set_value": {
+          "params": {
+            "value": {
+              "min": 5,
+              "max": 30
+            }
+          }
+        }
+      },
+      "cleanup_via": "valve.rf_water_timer_valve_1"
     },
     {
       "entity_id": "pi_audio.porch_speaker",
       "placement": "exterior",
       "zones": ["front_yard"],
       "services": {
-        "play_clip": { "params": { "clip": { "enum": ["bark-5s", "wildlife"] } } },
-        "stop": {}
+        "play_clip": {
+          "params": {
+            "clip": {
+              "enum": ["bark-5s", "wildlife"]
+            }
+          }
+        },
+        "stop": {},
+        "speak": {
+          "params": {
+            "spoken_text": {
+              "maxLength": 240
+            },
+            "owner_notified": {
+              "enum": [true, false]
+            }
+          }
+        }
       }
     },
     {
-      "entity_id": "light.worklights",
+      "entity_id": "light.worklight_1",
       "placement": "interior",
       "zones": [],
-      "services": { "turn_on": {}, "turn_off": {} }
+      "services": {
+        "turn_on": {},
+        "turn_off": {}
+      }
     }
   ]
 }

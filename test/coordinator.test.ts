@@ -14,13 +14,22 @@ import { openDb, recordIntent, openIncident } from '../src/db.ts';
 import type { ActuatorConfig } from '../src/ladder.ts';
 
 const allowlist = loadAllowlist(new URL('../config/allowlist.json', import.meta.url).pathname);
+// The shipped allowlist has no exterior light (QP-06: none to test), so the ladder's L2 step is
+// exercised with a test-only one.
 const withInterior = {
-  entities: new Map(allowlist.entities).set('light.stairs', {
-    entity_id: 'light.stairs',
-    placement: 'interior',
-    zones: [],
-    services: { turn_on: {}, turn_off: {} },
-  }),
+  entities: new Map(allowlist.entities)
+    .set('light.stairs', {
+      entity_id: 'light.stairs',
+      placement: 'interior',
+      zones: [],
+      services: { turn_on: {}, turn_off: {} },
+    })
+    .set('switch.patio_light_socket_1', {
+      entity_id: 'switch.patio_light_socket_1',
+      placement: 'exterior',
+      zones: ['front_yard'],
+      services: { turn_on: {}, turn_off: {} },
+    }),
 };
 
 const actuatorCfg: ActuatorConfig = {
@@ -28,12 +37,13 @@ const actuatorCfg: ActuatorConfig = {
   zones: {
     front_yard: {
       exteriorLight: 'switch.patio_light_socket_1',
-      valve: 'valve.front_yard_sprinkler_valve',
-      durationSetter: 'number.front_yard_sprinkler_irrigation_duration',
+      valve: 'valve.rf_water_timer_valve_1',
+      durationSetter: 'number.rf_water_timer_irrigation_duration_1',
       speaker: 'pi_audio.porch_speaker',
     },
   },
   clips: { bark: 'bark-5s', wildlife: 'wildlife' },
+  audioMode: 'bark',
 };
 
 const T0 = 1_791_400_000_000;
@@ -165,8 +175,8 @@ describe('coordinator: intruder ladder dispatch (dry run)', () => {
       'turn_on light.stairs',
       'turn_on switch.patio_light_socket_1',
       'play_clip pi_audio.porch_speaker',
-      'set_value number.front_yard_sprinkler_irrigation_duration',
-      'open_valve valve.front_yard_sprinkler_valve',
+      'set_value number.rf_water_timer_irrigation_duration_1',
+      'open_valve valve.rf_water_timer_valve_1',
     ]);
     await t.clock.advance(40_000);
     await t.coord.tick();
@@ -182,14 +192,14 @@ describe('coordinator: intruder ladder dispatch (dry run)', () => {
       await t.settle();
       await t.clock.advance(5000);
     }
-    expect(t.calls()).toContain('open_valve valve.front_yard_sprinkler_valve');
+    expect(t.calls()).toContain('open_valve valve.rf_water_timer_valve_1');
     const h = setup({ mode: 'night', liveMode: () => 'home' });
     for (let s = 0; s <= 65; s += 5) {
       await h.coord.onEvaluation(h.ev('intruder', 'person_unknown'));
       await h.settle();
       await h.clock.advance(5000);
     }
-    expect(h.calls()).not.toContain('open_valve valve.front_yard_sprinkler_valve');
+    expect(h.calls()).not.toContain('open_valve valve.rf_water_timer_valve_1');
   });
 
   it('the level cap holds: with max level 1 nothing past L1 is dispatched', async () => {
@@ -206,8 +216,39 @@ describe('coordinator: intruder ladder dispatch (dry run)', () => {
     const t = setup();
     await t.coord.onEvaluation(t.ev('intruder', 'person_unknown', { captureTs: T0 - 16_000 }));
     await t.settle();
-    expect(t.intents()).toEqual([]);
+    expect(t.intents().filter((i) => i.service !== 'notify')).toEqual([]);
+    expect(t.calls()).toEqual([]);
     expect(t.events.some((e) => e.reason === 'stale_evidence')).toBe(true);
+  });
+
+  it('a stale level notification is still sent, labelled with why it is stale', async () => {
+    const t = setup();
+    await t.coord.onEvaluation(t.ev('intruder', 'person_unknown', { captureTs: T0 - 16_000 }));
+    await t.settle();
+    const texts = t.notes().map((n) => (n as { text: string }).text);
+    expect(texts).toEqual([
+      '[dry run, would send] Unknown person in front_yard (L1). (stale: evidence 16 s old)',
+    ]);
+    // Reverse state: fresh evidence produces the same notification without a label.
+    const f = setup();
+    await f.coord.onEvaluation(f.ev('intruder', 'person_unknown'));
+    await f.settle();
+    expect(f.notes().map((n) => (n as { text: string }).text)).toEqual([
+      '[dry run, would send] Unknown person in front_yard (L1).',
+    ]);
+    expect(f.calls()).toEqual(['turn_on light.stairs']);
+  });
+
+  it('future-dated evidence (clock rollback): actuators refuse it, the notification is labelled', async () => {
+    const t = setup();
+    await t.coord.onEvaluation(t.ev('intruder', 'person_unknown', { captureTs: T0 + 2000 }));
+    await t.settle();
+    expect(t.calls()).toEqual([]);
+    expect(t.intents().filter((i) => i.service !== 'notify')).toEqual([]);
+    expect(t.events.some((e) => e.reason === 'stale_evidence')).toBe(true);
+    expect(t.notes().map((n) => (n as { text: string }).text)).toEqual([
+      '[dry run, would send] Unknown person in front_yard (L1). (stale: evidence time is in the future)',
+    ]);
   });
 
   it('kill switch: no incident opens and nothing is dispatched', async () => {
@@ -283,7 +324,9 @@ describe('coordinator: stand-down, cleanup, reconcile', () => {
     await flush();
     await t.clock.advance(3000);
     await t.settle();
-    expect(t.intents()).toMatchObject([{ entity_id: 'light.stairs', status: 'unknown' }]);
+    expect(t.intents().filter((i) => i.service !== 'notify')).toMatchObject([
+      { entity_id: 'light.stairs', status: 'unknown' },
+    ]);
     const row = t.db.prepare('SELECT entity_id, ha_context_id, reason FROM reconcile').get();
     expect(row).toEqual({ entity_id: 'light.stairs', ha_context_id: null, reason: 'call_timeout' });
   });
@@ -357,7 +400,7 @@ describe('coordinator: stand-down, cleanup, reconcile', () => {
     expect(await t.coord.boot()).toEqual({ converted: 1, closed: 1 });
     expect(t.incidents()).toMatchObject([{ status: 'exited', exit_reason: 'restart' }]);
     expect(t.calls().sort()).toEqual([
-      'close_valve valve.front_yard_sprinkler_valve',
+      'close_valve valve.rf_water_timer_valve_1',
       'stop pi_audio.porch_speaker',
       'turn_off switch.patio_light_socket_1',
     ]);
@@ -378,8 +421,8 @@ describe('coordinator: wildlife profile', () => {
     await t.coord.onEvaluation(t.ev('wildlife', 'nuisance_at_night', armadillo));
     await t.settle();
     expect(t.calls()).toEqual([
-      'set_value number.front_yard_sprinkler_irrigation_duration',
-      'open_valve valve.front_yard_sprinkler_valve',
+      'set_value number.rf_water_timer_irrigation_duration_1',
+      'open_valve valve.rf_water_timer_valve_1',
       'turn_on light.stairs',
       'play_clip pi_audio.porch_speaker',
     ]);
@@ -404,8 +447,8 @@ describe('coordinator: wildlife profile', () => {
     );
     await t.settle();
     expect(t.calls()).toEqual([
-      'set_value number.front_yard_sprinkler_irrigation_duration',
-      'open_valve valve.front_yard_sprinkler_valve',
+      'set_value number.rf_water_timer_irrigation_duration_1',
+      'open_valve valve.rf_water_timer_valve_1',
       'turn_on light.stairs',
       'play_clip pi_audio.porch_speaker',
     ]);
@@ -422,7 +465,8 @@ describe('coordinator: wildlife profile', () => {
     const t = setup();
     await t.coord.onEvaluation(t.ev('intruder', 'person_unknown', { captureTs: T0 - 20_000 }));
     await t.settle();
-    expect(t.intents()).toEqual([]);
+    expect(t.intents().filter((i) => i.service !== 'notify')).toEqual([]);
+    expect(t.calls()).toEqual([]);
   });
 
   it('a duration read-back mismatch blocks open_valve', async () => {
@@ -437,7 +481,7 @@ describe('coordinator: wildlife profile', () => {
     });
     await t.coord.onEvaluation(t.ev('wildlife', 'nuisance_at_night', armadillo));
     await t.settle();
-    expect(t.calls()).not.toContain('open_valve valve.front_yard_sprinkler_valve');
+    expect(t.calls()).not.toContain('open_valve valve.rf_water_timer_valve_1');
     expect(t.events.some((e) => e.reason === 'duration_read_back_mismatch')).toBe(true);
   });
 
@@ -456,7 +500,7 @@ describe('coordinator: wildlife profile', () => {
     await t.clock.advance(40_000);
     await t.coord.tick();
     expect(t.db.prepare('SELECT entity_id, reason FROM reconcile').all()).toContainEqual({
-      entity_id: 'valve.front_yard_sprinkler_valve',
+      entity_id: 'valve.rf_water_timer_valve_1',
       reason: 'valve_open_after_40s',
     });
   });
@@ -473,7 +517,7 @@ describe('coordinator: wildlife profile', () => {
       { profile: 'intruder', status: 'active', level: 1 },
     ]);
     const after = t.calls().slice(4);
-    expect(after).toContain('close_valve valve.front_yard_sprinkler_valve');
+    expect(after).toContain('close_valve valve.rf_water_timer_valve_1');
     expect(after).toContain('stop pi_audio.porch_speaker');
     expect(after.at(-1)).toBe('turn_on light.stairs');
   });
@@ -481,6 +525,7 @@ describe('coordinator: wildlife profile', () => {
   it('wildlife during an open intruder incident is logged only', async () => {
     const t = setup();
     await t.coord.onEvaluation(t.ev('intruder', 'person_unknown'));
+    await t.settle();
     await t.coord.onEvaluation(t.ev('wildlife', 'nuisance_at_night', armadillo));
     await t.settle();
     expect(t.calls()).toEqual(['turn_on light.stairs']);
@@ -524,7 +569,7 @@ describe('actuators: the dry-run lock and live adapters', () => {
     expect(a.live).toBe(false);
     await a.ha.call({
       intentId: 'x',
-      entity_id: 'valve.front_yard_sprinkler_valve',
+      entity_id: 'valve.rf_water_timer_valve_1',
       service: 'open_valve',
       dispatchEpochMs: 1,
     });

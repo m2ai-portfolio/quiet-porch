@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+QP_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+if systemctl --user is-active --quiet quiet-porch-rehearsal.service; then
+  systemctl --user restart quiet-porch-rehearsal.service
+else
+  systemd-run --user --unit quiet-porch-rehearsal --description 'Quiet Porch synthetic rehearsal only' \
+    --property "WorkingDirectory=$QP_ROOT" --property Restart=on-failure --collect \
+    /usr/bin/node scripts/serve-demo.ts --host 0.0.0.0 --port 3472 --state-dir state/rehearsal
+fi

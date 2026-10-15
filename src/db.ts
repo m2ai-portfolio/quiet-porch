@@ -338,6 +338,12 @@ export function convertPendingIntents(db: DatabaseSync, now = Date.now()): numbe
       ha_context_id: string | null;
     }[];
     for (const p of pending) {
+      if (p.entity_id === 'notification.owner') {
+        db.prepare(
+          "UPDATE action_intents SET status='unknown', result='notification_unconfirmed_at_boot', completed_at=? WHERE intent_id=?",
+        ).run(now, p.intent_id);
+        continue;
+      }
       openReconcile(
         db,
         {

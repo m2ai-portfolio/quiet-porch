@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# qp-speaker-setup <speaker_mac>: keep one Bluetooth speaker ready to play the first word (QP-15).
+# Found on the Anker SoundCore: PipeWire suspends an idle A2DP sink and resuming takes ~7 s, and
+# the speaker mutes its own amp on silence and needs ~2 s to wake. Either one clips the start of
+# every alert. This installs a WirePlumber rule (A2DP pinned, no suspend, no pause on idle) and a
+# user unit that loops an inaudible 20 Hz tone at -40 dBFS. Run on the Pi from a copy of
+# scripts/pi; the address stays out of the public repo. Undo: see the comments in each file.
+set -euo pipefail
+mac="${1:-}"
+[[ $mac =~ ^([0-9A-F]{2}:){5}[0-9A-F]{2}$ ]] || { echo "bad_mac"; exit 2; }
+id="${mac//:/_}"
+templates="$(cd "$(dirname "$0")" && pwd)/speaker"
+config="${XDG_CONFIG_HOME:-$HOME/.config}"
+wp="$config/wireplumber/wireplumber.conf.d"
+units="$config/systemd/user"
+tone="$HOME/quiet-porch/keepalive"
+mkdir -p "$wp" "$units" "$tone"
+render() { sed -e "s/@SPEAKER_MAC@/$mac/g" -e "s/@SPEAKER_ID@/$id/g" "$templates/$1.in" > "$2/$1"; }
+render 51-quiet-porch-anker-nosuspend.conf "$wp"
+render qp-keepalive.service "$units"
+# 60 s of 20 Hz is exactly 1200 periods, so the loop has no seam. Peak 0.01 of full scale.
+python3 - "$tone/keepalive-20hz.wav" <<'EOF'
+import math, struct, sys, wave
+rate, period = 48000, 2400
+one = b"".join(
+    struct.pack("<hh", s, s)
+    for s in (round(327.67 * math.sin(2 * math.pi * i / period)) for i in range(period))
+)
+with wave.open(sys.argv[1], "wb") as w:
+    w.setnchannels(2)
+    w.setsampwidth(2)
+    w.setframerate(rate)
+    w.writeframes(one * 1200)
+EOF
+systemctl --user daemon-reload
+systemctl --user restart wireplumber
+systemctl --user enable --now qp-keepalive
+echo "installed"

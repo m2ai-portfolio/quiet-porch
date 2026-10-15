@@ -77,7 +77,7 @@ describe('ledger wording', () => {
   });
 
   it('exit reasons are plain', () => {
-    expect(describeExit('departure', 'exited')).toBe('next frame empty');
+    expect(describeExit('departure', 'exited')).toBe('two accepted frames empty');
     expect(describeExit('stand_down:stop_link', 'cancelled')).toBe('stood down (stop link)');
     expect(describeExit('expected:Lutfiya', 'cancelled')).toBe('expected (Lutfiya)');
     expect(describeExit(null, 'active')).toBe('still active');
@@ -116,11 +116,11 @@ describe('synthetic night replay', () => {
     expect(gate.events).toBe(9); // seven person frames and two empty ones fold into one line
     expect(gate.levels.map((e) => [e.level, e.dwell_ms])).toEqual([
       [1, 0],
-      [2, 20_000],
-      [3, 40_000],
-      [4, 60_000],
+      [2, 10_000],
+      [3, 20_000],
+      [4, 40_000],
     ]);
-    expect(gate.stop_reason).toBe('next frame empty');
+    expect(gate.stop_reason).toBe('two accepted frames empty');
     // The freshness proof: no level fired on a frame older than the 15 s limit.
     for (const e of gate.levels) expect(e.age_ms!).toBeLessThan(15_000);
     for (const a of gate.actions) expect(a.age_ms!).toBeLessThan(15_000);
@@ -166,8 +166,8 @@ describe('night report (wording)', () => {
     const live = buildLedger(r.db!, span);
     const gate = live.lines.find((l) => l.profile === 'intruder')!;
     expect(handledSentence(gate, TZ)).toBe(
-      'a person in the front yard at 11:02. It switched on the outside light at 20 seconds, ' +
-        'played a sound at 40 seconds and ran the sprinkler at 60 seconds. The person was gone by 11:03.',
+      'a person in the front yard at 11:02. It switched on the outside light at 10 seconds, ' +
+        'played a sound at 20 seconds and ran the sprinkler at 40 seconds. The person was gone by 11:03.',
     );
     const text = nightReport(live, span, {
       ...opts,
@@ -192,8 +192,8 @@ describe('night report (wording)', () => {
     const gate = ledger.lines.find((l) => l.profile === 'intruder')!;
     expect(gate.level).toBe(4);
     expect(handledSentence(gate, TZ)).toBe(
-      'a person in the front yard at 11:02. It switched on the outside light at 20 seconds, ' +
-        'could not play a sound at 40 seconds and could not run the sprinkler at 60 seconds. ' +
+      'a person in the front yard at 11:02. It switched on the outside light at 10 seconds, ' +
+        'could not play a sound at 20 seconds and could not run the sprinkler at 40 seconds. ' +
         'The person was gone by 11:03.',
     );
     const text = nightReport(ledger, span, { ...opts, dryRun: false }).text;
@@ -215,11 +215,13 @@ describe('night report (wording)', () => {
     r.db!.close();
   });
 
-  it('an empty night says silent all night with the window times', () => {
+  it('an empty night does not claim healthy silence', () => {
     const db = openDb(':memory:');
     const span = { from: 0, to: 1, inProgress: false };
     const empty = nightReport(buildLedger(db, span), span, { ...opts, dryRun: false });
-    expect(empty.text).toBe('No events. Silent all night, 8 PM to 6:30 AM.');
+    expect(empty.text).toBe(
+      'No recorded events, 8 PM to 6:30 AM. Delivery coverage is unverified; this does not prove a quiet night.',
+    );
     db.close();
   });
 
@@ -438,7 +440,7 @@ describe('ledger honesty, third pass', () => {
     expect(clipped.level).toBe(4);
     expect(handledSentence(clipped, TZ, isExterior)).toBe(handledSentence(gate, TZ, isExterior));
     expect(handledSentence(clipped, TZ, isExterior)).toContain(
-      'switched on the outside light at 20 seconds',
+      'switched on the outside light at 10 seconds',
     );
     r.db!.close();
   });
@@ -465,7 +467,7 @@ describe('ledger honesty, third pass', () => {
     );
     r.db!.exec(
       'INSERT INTO action_intents (intent_id, incident_id, entity_id, service, data, cls, evidence_id, dispatched_at, status) ' +
-        "SELECT 'forged', incident_id, 'light.worklights', 'turn_on', '{}', 'escalation', evidence_id, dispatched_at, 'done' FROM action_intents WHERE service = 'play_clip' LIMIT 1",
+        "SELECT 'forged', incident_id, 'light.worklight_1', 'turn_on', '{}', 'escalation', evidence_id, dispatched_at, 'done' FROM action_intents WHERE service = 'play_clip' LIMIT 1",
     );
     const gate = buildLedger(r.db!, { from: 0, to: 9e15 }).lines.find(
       (l) => l.profile === 'intruder',

@@ -4,9 +4,8 @@
 // banned-word filter. A line that fails the filter is replaced by the cached fallback phrase,
 // so the porch never says something we did not approve.
 //
-// Built behind a STUB for playback: nothing here calls Polly or the Pi speaker, and
-// the ladder still plays its bark clip. Wiring (replace play_clip, retune LEVEL_DWELL_MS to
-// 0/0/10/20/40 s, synthesize with Polly) is a team decision, not made here.
+// Composition is separate from output. Matt selected speech and 0/0/10/20/40-second timing.
+// speech.ts supplies the gated Polly/cache adapter; the normal server still uses dry run.
 
 export const FALLBACK_LINE = "You're on camera. The owner has been notified.";
 
@@ -250,7 +249,7 @@ export interface ComposedLine {
 // " I can see <clothing>." and always the closing fact. Nothing else is ever said.
 function compose(
   rawSlots: LineSlots | null | undefined,
-  opts: { places?: string[] } = {},
+  opts: { places?: string[]; ownerNotified?: boolean } = {},
 ): ComposedLine {
   // Slots come from model JSON: anything that is not an object of strings is simply empty.
   const slots: LineSlots = rawSlots && typeof rawSlots === 'object' ? rawSlots : {};
@@ -262,10 +261,15 @@ function compose(
 
   const where = place ? ` at the ${place}` : '';
   const sees = items ? ` I can see ${clothingSentence(items)}.` : '';
-  const text = `You're on camera${where}.${sees} The owner has been notified.`;
+  const text = `You're on camera${where}.${sees}${opts.ownerNotified === false ? '' : ' The owner has been notified.'}`;
 
   // Second check on the finished line, whatever the slots said.
-  if (bannedIn(text).length > 0) return { text: FALLBACK_LINE, usedFallback: true, dropped };
+  if (bannedIn(text).length > 0)
+    return {
+      text: opts.ownerNotified === false ? "You're on camera." : FALLBACK_LINE,
+      usedFallback: true,
+      dropped,
+    };
   return { text, usedFallback: false, dropped };
 }
 
@@ -273,16 +277,20 @@ function compose(
 // it falls back to the plain approved line.
 export function composeLine(
   rawSlots: LineSlots | null | undefined,
-  opts: { places?: string[] } = {},
+  opts: { places?: string[]; ownerNotified?: boolean } = {},
 ): ComposedLine {
   try {
     return compose(rawSlots, opts ?? {});
   } catch {
-    return { text: FALLBACK_LINE, usedFallback: true, dropped: ['slots'] };
+    return {
+      text: opts?.ownerNotified === false ? "You're on camera." : FALLBACK_LINE,
+      usedFallback: true,
+      dropped: ['slots'],
+    };
   }
 }
 
-// Playback seam. A later change replaces the stub with Polly synthesis and the Pi speaker.
+// Legacy playback seam, retained for callers that intentionally simulate composition only.
 export interface Speaker {
   speak(text: string): Promise<{ ok: boolean; detail?: string }>;
 }
@@ -295,4 +303,16 @@ export function createStubSpeaker(log: (text: string) => void = () => {}): Speak
       return { ok: true, detail: 'stub: nothing was played' };
     },
   };
+}
+
+// Only sentences reproducible by the fixed template may reach a synthesizer.
+export function approvedSpeech(text: string, ownerNotified: boolean): boolean {
+  if (typeof text !== 'string' || text.length > 240 || bannedIn(text).length) return false;
+  const match =
+    /^You're on camera(?: at the ([a-z ]+))?\.(?: I can see ([^.]+)\.)?( The owner has been notified\.)?$/.exec(
+      text,
+    );
+  if (!match || Boolean(match[3]) !== ownerNotified) return false;
+  const clothing = match[2]?.replace(/\b(?:a|an) /g, '');
+  return composeLine({ place: match[1], clothing }, { ownerNotified }).text === text;
 }
