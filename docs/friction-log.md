@@ -196,6 +196,18 @@ Times: `Z` is UTC, `CDT` is America/Chicago. Dates are 2026.
 - **Workaround:** `LIVE_CAPTURE_NO_GO` in `src/capture-time.ts` labels every decoded live frame `arrival` and `createLiveSource` rejects it. `deriveCaptureTime` would accept a stream reference only from an allowlisted clock within 250 ms ahead of and 2000 ms behind receipt, and only with an explicit policy switch.
 - **Reproduce:** `docs/delivery/live-view-spike.md` and `docs/delivery/capture-time-provenance.md`; `npx vitest run test/live-decoder.test.ts`.
 
+## Ring device sharing
+
+### F-18 Relocating a camera in the Ring app removed it from the private app
+
+- **Endpoint:** `GET /v1/devices` (device list) and `GET /v1/devices/{id}/media/image/download` for the moved camera.
+- **Observed:** 2026-10-19, 11:15 to 11:45 CDT, after camera 1 was moved to the front yard on [VERIFY: date of the move, 10-17 or 10-18]. The last frame the service held for camera 1 was from 2026-10-17.
+- **Request ID:** [VERIFY: `request_id` of the 403 in `frame-probe.jsonl` or `friction.jsonl`, and the `GET /v1/devices` call that listed one device].
+- **Finding:** the device list returned only the front door; requests for camera 1 answered `403`. The owner could watch camera 1 in the Ring app at the same time, so the camera, the account and the token were fine; only the camera's share with the private app was gone. Nothing in the API, the webhook stream or the developer console announced the change.
+- **Cost:** [VERIFY: nights without camera 1 in the ledger, from the move to 10-19] and about half an hour of diagnosis before the cause was found.
+- **Workaround:** re-add the camera to the private app in the developer console ("Connect Ring account" flow, same as the first link). In the service, a camera that disappears from the device list should become a ledger line (`device missing since <time>`) instead of silence; today a dropped share and a quiet camera look the same, as in F-07.
+- **Reproduce:** move a camera that is shared with the private app to another location in the Ring app, then `curl -H "Authorization: Bearer $TOKEN" "$RING_API/v1/devices"` and compare the device count before and after.
+
 ## Product feedback for Amazon
 
 Each item follows from an entry above.
@@ -207,3 +219,4 @@ Each item follows from an entry above.
 5. Name the field of the token-exchange POST (F-08), and say in the console that linking starts in the AppStore.
 6. Put `e2e_encryption` in the `include=configurations` documentation and publish the Playground host and token flow (F-09, F-11).
 7. Expose an absolute capture time for live-view frames, for example an RTCP sender-report NTP time or `a=ts-refclk` in the SDP, and say which clock it comes from (F-17).
+8. Keep a camera's share with a private app when the camera is moved or re-registered in the Ring app, or send a webhook when a device leaves the app's device list (F-18).
