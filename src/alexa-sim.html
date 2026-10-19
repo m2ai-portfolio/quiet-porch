@@ -146,6 +146,21 @@
         color: var(--muted);
         font-size: 14px;
       }
+      /* ?video=1: the page as it is filmed. The idle ring is hidden (on screen it reads as a
+         request that never finished), the token box is off screen, the text is one size up.
+         The phone-width column and everything the page says stay the same. */
+      body.video .ring:not(.on) {
+        visibility: hidden;
+      }
+      body.video #tokbox {
+        display: none;
+      }
+      body.video h1 {
+        font-size: 24px;
+      }
+      body.video .msg {
+        font-size: 17px;
+      }
     </style>
   </head>
   <body>
@@ -190,6 +205,7 @@
     </form>
     <script>
       const $ = (id) => document.getElementById(id);
+      if (new URLSearchParams(location.search).get('video')) document.body.classList.add('video');
       let token = '';
       try {
         token = localStorage.getItem('qp-token') || '';
