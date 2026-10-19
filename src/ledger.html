@@ -96,6 +96,25 @@
         border: 1px solid var(--rule);
         cursor: pointer;
       }
+      /* ?video=1: the page as it is filmed. Larger type so one night reads at 1080p, operator
+         controls off screen, long lines wrap under the subtype instead of at the viewport edge.
+         Nothing about the lines themselves changes; they come from get_ledger as before. */
+      body.video {
+        font-size: clamp(15px, 1.3vw, 26px);
+        line-height: 1.55;
+      }
+      body.video main {
+        max-width: none;
+        padding: 32px 40px 48px;
+      }
+      body.video pre {
+        padding-left: 10ch;
+        text-indent: -10ch;
+      }
+      body.video #tokbox,
+      body.video #note {
+        display: none;
+      }
     </style>
   </head>
   <body>
@@ -123,6 +142,7 @@
     </main>
     <script>
       const $ = (id) => document.getElementById(id);
+      if (new URLSearchParams(location.search).get('video')) document.body.classList.add('video');
       let token = '';
       try {
         token = localStorage.getItem('qp-token') || '';

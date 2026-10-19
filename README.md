@@ -114,7 +114,9 @@ lingering person is one line for the whole incident, with the age at every level
 - **Morning report.** `get_night_report` (status-mcp, read token) answers "what happened last
   night" in one breath, in dry run it says nothing was switched.
 - **Decision-log view.** `get_ledger` feeds the page at `/ledger`; `node scripts/ledger.ts` prints
-  the same lines in a terminal from a copy of the live database.
+  the same lines in a terminal from a copy of the live database. `/ledger?video=1` and
+  `/alexa?video=1` show the same content at recording size with the token box off screen; set
+  the token on the page once without the parameter first.
 - **I'm stepping out.** `expect_me` (owner token) opens a window of at most 60 minutes in which a
   person at the door is expected; `expect_me` with `cancel: true` ends it. The ladder stays at L0
   and each event is a ledger line saying `expected`. A running ladder or sprinkler run ends and
