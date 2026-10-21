@@ -37,8 +37,13 @@ except Exception as error:
 export function createSpeakerOutput(deps: {
   ssh: (command: string, signal?: AbortSignal) => Promise<string>;
   speakerFingerprint: string;
+  // Exact readback level a one-shot policy requires instead of the speaker default.
+  requiredVolume?: number;
   clip: string;
   authorized: () => boolean;
+  // Optional one-shot authority deadline, transferred to the remote helper so
+  // queued playback cannot begin after approval expires.
+  authorityRemainingMs?: () => number;
   killed: () => boolean;
   audit: DiagnosticAudit;
   now?: () => number;
@@ -48,10 +53,16 @@ export function createSpeakerOutput(deps: {
   const mono = deps.mono ?? (() => performance.now());
   const command = speakerReadinessCommand(deps.clip);
   const checks = ['sink', 'volume', 'helper', 'status', 'clip'] as const;
+  // The last admission snapshot. Dispatch reuses it instead of a second round trip:
+  // replay-7 (2026-10-21) reached speech with 536 ms of freshness, spent 367 ms on a
+  // pre-dispatch inspect, and the Pi refused a 168 ms deadline. Any later inspect that
+  // is not ready clears it, so a failed re-check can never dispatch on stale readiness.
+  let admitted: { bootId: string; piMonotonicMs: number; receivedMono: number } | undefined;
   async function inspect(
     signal?: AbortSignal,
   ): Promise<{ bootId: string; piMonotonicMs: number } | undefined> {
     const started = mono();
+    admitted = undefined;
     diagnostic(deps.audit, { event: 'speaker_readiness_started', started_at: now() });
     try {
       const snapshot: unknown = JSON.parse(await deps.ssh(command, signal));
@@ -64,7 +75,8 @@ export function createSpeakerOutput(deps: {
           ? (failedCheck ?? 'protocol')
           : s.speakerFingerprint !== deps.speakerFingerprint || s.virtual !== false
             ? 'sink'
-            : typeof s.volume !== 'number' || !speakerVolumeReady(s.volume, deps.speakerFingerprint)
+            : typeof s.volume !== 'number' ||
+                !speakerVolumeReady(s.volume, deps.speakerFingerprint, deps.requiredVolume)
               ? 'volume'
               : s.boundedHelper !== true
                 ? 'helper'
@@ -88,9 +100,13 @@ export function createSpeakerOutput(deps: {
           ? { exit_code: s.exitCode }
           : {}),
       });
-      return reason === undefined
-        ? { bootId: s.bootId as string, piMonotonicMs: s.piMonotonicMs as number }
-        : undefined;
+      if (reason !== undefined) return undefined;
+      admitted = {
+        bootId: s.bootId as string,
+        piMonotonicMs: s.piMonotonicMs as number,
+        receivedMono: mono(),
+      };
+      return { bootId: admitted.bootId, piMonotonicMs: admitted.piMonotonicMs };
     } catch (error) {
       diagnostic(deps.audit, {
         event: 'speaker_readiness_failed',
@@ -111,7 +127,9 @@ export function createSpeakerOutput(deps: {
         try {
           if (signal.aborted) throw new Error('speech_cancelled');
           stage = 'readiness';
-          const snapshot = await inspect(signal);
+          // No round trip here: the admission inspect already supplied the Pi clock and
+          // boot ID, and the helper re-checks sink, volume, stop epoch and boot ID itself.
+          const snapshot = admitted;
           if (!snapshot) throw new Error('audio_not_ready');
           stage = 'cancelled';
           if (signal.aborted) throw new Error('speech_cancelled');
@@ -120,15 +138,27 @@ export function createSpeakerOutput(deps: {
           stage = 'emergency_disarm';
           if (deps.killed()) throw new Error('audio_disarmed');
           stage = 'freshness';
-          // The remote sample precedes receipt. Adding remaining time at receipt
-          // yields a conservative Pi deadline without assuming synchronized clocks.
-          const remaining = guard.remainingMs();
-          const deadline = snapshot.piMonotonicMs + remaining;
+          // The remote sample precedes its receipt, so the Pi clock projected by the local
+          // time elapsed since receipt runs at or behind the Pi's own CLOCK_BOOTTIME. Adding
+          // the remaining time to that projection yields a conservative Pi deadline without
+          // assuming synchronized wall clocks.
+          const freshness = guard.remainingMs();
+          const authorityRemaining = deps.authorityRemainingMs?.();
+          if (
+            authorityRemaining !== undefined &&
+            (!Number.isFinite(authorityRemaining) || authorityRemaining <= 0)
+          )
+            throw new Error('audio_authority_expired');
+          const remaining = Math.floor(Math.min(freshness, authorityRemaining ?? Infinity));
+          const snapshotAge = Math.max(0, Math.floor(mono() - snapshot.receivedMono));
+          const deadline = snapshot.piMonotonicMs + snapshotAge + remaining;
           diagnostic(deps.audit, {
             event: 'speech_prepared',
             prepared_at: now(),
             elapsed_ms: mono() - started,
-            remaining_freshness_ms: remaining,
+            remaining_freshness_ms: freshness,
+            remaining_authority_ms: authorityRemaining,
+            snapshot_age_ms: snapshotAge,
           });
           // Final action-time check AFTER all preparation, including diagnostic writes.
           // Never refresh capture timestamps or weaken the controller's six-second guard.

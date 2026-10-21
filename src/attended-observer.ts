@@ -1,10 +1,11 @@
 // Bounded recorded-image follow-ups. Authenticated Ring capture metadata, never arrival time.
 // The caller starts this only after a newly ingested eligible event from the approved camera.
-import { judgeFreshFrame } from './fresh-judgement.ts';
+import { judgeFreshFrame, StaleResultBreak } from './fresh-judgement.ts';
 import { createHash } from 'node:crypto';
 import { checkEventFrame, type Download } from './frames.ts';
 import { evidenceIdFor, judgeFrame, type PipelineConfig } from './pipeline.ts';
 import { personEvidence, validatePerception } from './perception.ts';
+import { judgementReasons } from './judgement-reasons.ts';
 import type { TestEvidence, TestScope } from './attended-test.ts';
 import {
   diagnostic,
@@ -15,6 +16,15 @@ import {
 } from './monitor-diagnostics.ts';
 export function createAttendedObserver(deps: {
   parallelCritique?: boolean;
+  // Settle both judgements before reporting a failure, typing a provider 503 as
+  // ModelUnavailableBreak. Off by default: ongoing monitoring keeps Promise.all.
+  settleModelFailures?: boolean;
+  // Asked only when a completed result is too old (age >= 6 s). True raises StaleResultBreak
+  // after the usual rejection row; absent or false keeps the silent drop.
+  breakOnStaleResult?: () => boolean;
+  // Adds sanitized perception and critique reasons to judged-frame rows (observation and
+  // stale rejection). Off by default: ongoing monitoring rows are unchanged.
+  recordJudgementReasons?: boolean;
   scope: TestScope;
   config: () => PipelineConfig;
   download: Download;
@@ -109,13 +119,23 @@ export function createAttendedObserver(deps: {
         stage = 'model_judgement';
         const args = [image.image, ts, evidenceId, deps.scope.zone, cfg, deps.converse] as const;
         const judgement = await (deps.parallelCritique
-          ? judgeFreshFrame(...args, { audit: record, now })
+          ? judgeFreshFrame(
+              ...args,
+              { audit: record, now },
+              { settleSiblings: deps.settleModelFailures === true },
+            )
           : judgeFrame(...args));
         stage = 'result_authorization';
         if (!deps.allowed()) return;
+        const reasons = deps.recordJudgementReasons === true ? judgementReasons(judgement) : {};
         const age = now() - ts;
         if (age < 0 || age >= 6000) {
-          deps.audit({ event: 'followup_rejected', reason: 'model_result_stale' });
+          deps.audit({ event: 'followup_rejected', reason: 'model_result_stale', ...reasons });
+          // A reversed clock (age < 0) is never "too old" and never recoverable.
+          if (age >= 6000 && deps.breakOnStaleResult?.() === true) {
+            stage = 'result_freshness';
+            throw new StaleResultBreak(ts);
+          }
           return;
         }
         stage = 'result_validation';
@@ -145,6 +165,7 @@ export function createAttendedObserver(deps: {
           verdict,
           decision: judgement.decision.kind,
           reason: judgement.decision.reason,
+          ...reasons,
         });
         return { ...deps.scope, id: evidenceId, captureTs: ts, source: 'ring', verdict };
       } catch (error) {

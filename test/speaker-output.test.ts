@@ -34,10 +34,12 @@ function rig(delay = 250) {
   let authority = true,
     killed = false;
   let afterReadiness = () => {};
+  let afterPrepared = () => {};
   let dispatchError: Error | undefined;
   let acknowledgement = true;
   const rows: Record<string, unknown>[] = [];
   const dispatchTimes: number[] = [];
+  const dispatchDeadlines: number[] = [];
   const ssh = vi.fn(async (command: string, signal?: AbortSignal) => {
     if (command.startsWith('python3 -c ')) {
       time += delay;
@@ -47,6 +49,7 @@ function rig(delay = 250) {
     }
     if (command.startsWith('qp-speak-guarded dispatch ')) {
       dispatchTimes.push(time);
+      dispatchDeadlines.push(Number(command.split(' ').at(-1)));
       time += 200;
       if (dispatchError) throw dispatchError;
       return acknowledgement ? `accepted qp-audio-${command.split(' ')[2]}` : privateText;
@@ -59,13 +62,18 @@ function rig(delay = 250) {
     ssh,
     speakerFingerprint: fingerprint,
     clip,
-    audit: (row) => rows.push(row),
+    audit: (row) => {
+      rows.push(row);
+      // Models local work between the prepared record and the final freshness check.
+      if (row.event === 'speech_prepared') afterPrepared();
+    },
     authorized: () => authority,
     killed: () => killed,
     now: () => time,
     mono: () => time,
   });
   const outputs = speaker.outputs();
+  const readinessCalls = () => ssh.mock.calls.filter(([c]) => c.startsWith('python3 -c ')).length;
   return {
     guard: () =>
       createActionGuard({
@@ -79,6 +87,8 @@ function rig(delay = 250) {
     ssh,
     rows,
     dispatchTimes,
+    dispatchDeadlines,
+    readinessCalls,
     now: () => time,
     setTime: (next: number) => {
       time = next;
@@ -88,6 +98,9 @@ function rig(delay = 250) {
     },
     onReadiness: (fn: () => void) => {
       afterReadiness = fn;
+    },
+    onPrepared: (fn: () => void) => {
+      afterPrepared = fn;
     },
     revoke: () => {
       authority = false;
@@ -112,6 +125,122 @@ it('uses one read-only round trip for all checks; preflight never dispatches or 
   expect(r.rows.at(-1)).toMatchObject({ ready: true, elapsed_ms: 250 });
 });
 
+it('transfers the shorter one-shot authority deadline so delayed remote launch is refused', async () => {
+  let time = 100000;
+  let remotePlayCount = 0;
+  const expires = time + 1000;
+  const ssh = vi.fn(async (command: string) => {
+    if (command.startsWith('python3 -c ')) {
+      time += 250;
+      return JSON.stringify(healthy);
+    }
+    if (command.startsWith('qp-speak-guarded dispatch ')) {
+      const deadline = Number(command.split(' ').at(-1));
+      // Admitted 250 ms after the Pi sample; 750 ms of authority remain at dispatch.
+      expect(deadline).toBe(healthy.piMonotonicMs + 750);
+      time += 800;
+      // Model the unchanged Pi helper's final check after remote queuing.
+      if (healthy.piMonotonicMs + 800 >= deadline) return 'refused_expired';
+      remotePlayCount++;
+      return 'accepted qp-audio-fixture';
+    }
+    if (command.startsWith('qp-stop ')) return 'stopped';
+    if (command === 'qp-status') return 'idle';
+    throw new Error('unexpected command');
+  });
+  const speaker = createSpeakerOutput({
+    ssh,
+    speakerFingerprint: fingerprint,
+    clip,
+    authorized: () => time < expires,
+    authorityRemainingMs: () => expires - time,
+    killed: () => false,
+    audit: () => {},
+    now: () => time,
+    mono: () => time,
+  });
+  expect(await speaker.ready()).toBe(true);
+  const outputs = speaker.outputs();
+  const guard = createActionGuard({
+    captureTs: time,
+    wall: () => time,
+    mono: () => time,
+    unsafeReason: () => undefined,
+  });
+  await expect(
+    outputs.speak('fixture', new AbortController().signal, () => true, guard),
+  ).rejects.toThrow();
+  await outputs.stop();
+  expect(remotePlayCount).toBe(0);
+  expect(ssh.mock.calls.filter(([c]) => c.startsWith('qp-speak-guarded dispatch '))).toHaveLength(
+    1,
+  );
+});
+
+it.each([0, -1, NaN, Infinity])(
+  'refuses invalid remaining authority %s before dispatch',
+  async (remaining) => {
+    const ssh = vi.fn(async () => JSON.stringify(healthy));
+    const speaker = createSpeakerOutput({
+      ssh,
+      speakerFingerprint: fingerprint,
+      clip,
+      authorized: () => true,
+      authorityRemainingMs: () => remaining,
+      killed: () => false,
+      audit: () => {},
+    });
+    const guard = createActionGuard({
+      captureTs: Date.now(),
+      wall: Date.now,
+      mono: () => performance.now(),
+      unsafeReason: () => undefined,
+    });
+    expect(await speaker.ready()).toBe(true);
+    await expect(
+      speaker.outputs().speak('fixture', new AbortController().signal, () => true, guard),
+    ).rejects.toThrow();
+    expect(ssh).toHaveBeenCalledTimes(1);
+  },
+);
+
+it('refuses to speak before any admission inspect, without a round trip', async () => {
+  const r = rig();
+  await expect(
+    r.outputs.speak('fixture', new AbortController().signal, () => true, r.guard()),
+  ).rejects.toThrow('audio_not_ready');
+  expect(r.ssh).not.toHaveBeenCalled();
+  expect(r.rows).toContainEqual(
+    expect.objectContaining({ event: 'speech_output_failed', stage: 'readiness' }),
+  );
+});
+
+it('dispatches on the admission snapshot alone and projects the Pi deadline by elapsed time', async () => {
+  const r = rig();
+  expect(await r.speaker.ready()).toBe(true); // Pi sample 50000 received at 100250.
+  r.setTime(r.now() + 20000);
+  await r.outputs.speak('fixture', new AbortController().signal, () => true, r.guard());
+  expect(r.readinessCalls()).toBe(1);
+  expect(r.dispatchTimes).toEqual([120250]);
+  // 50000 + 20000 elapsed since receipt + 6000 fresh: never later than the Pi's own clock.
+  expect(r.dispatchDeadlines).toEqual([healthy.piMonotonicMs + 20000 + 6000]);
+  expect(r.rows).toContainEqual(
+    expect.objectContaining({ event: 'speech_prepared', snapshot_age_ms: 20000 }),
+  );
+  expect(r.rows).toContainEqual(expect.objectContaining({ event: 'speech_dispatch_acknowledged' }));
+});
+
+it('a later inspect that is not ready clears the admission and blocks dispatch', async () => {
+  const r = rig();
+  expect(await r.speaker.ready()).toBe(true);
+  r.snapshot({ ...healthy, idle: false });
+  expect(await r.speaker.ready()).toBe(false);
+  await expect(
+    r.outputs.speak('fixture', new AbortController().signal, () => true, r.guard()),
+  ).rejects.toThrow('audio_not_ready');
+  expect(r.dispatchTimes).toEqual([]);
+});
+
 it.each([
   [{ speakerFingerprint: 'other' }, 'sink'],
   [{ virtual: true }, 'sink'],
@@ -129,6 +258,7 @@ it.each([
 ] as const)('rejects unavailable readiness without dispatch: %j', async (patch, reason) => {
   const r = rig();
   r.snapshot({ ...healthy, ...patch });
+  expect(await r.speaker.ready()).toBe(false);
   await expect(
     r.outputs.speak('fixture', new AbortController().signal, () => true, r.guard()),
   ).rejects.toThrow();
@@ -187,7 +317,9 @@ async function encounter(delay: number) {
 it('preflight-to-dispatch succeeds within 6s, caps outputs and stops on departure', async () => {
   const r = await encounter(250);
   const capture = await r.feed(21000);
-  expect(r.dispatchTimes).toEqual([capture + 5534]);
+  // Dispatch leaves at the analysis age itself: no readiness round trip precedes it.
+  expect(r.dispatchTimes).toEqual([capture + 5284]);
+  expect(r.readinessCalls()).toBe(2); // startup preflight and encounter arm only
   expect(r.alert).toHaveBeenCalledTimes(1);
   expect(r.rows).toContainEqual(expect.objectContaining({ event: 'speak_ack' }));
   await r.feed(24500);
@@ -202,7 +334,8 @@ it('preflight-to-dispatch succeeds within 6s, caps outputs and stops on departur
 });
 
 it.each([716, 1360])('still refuses dispatch when preparation takes %i ms', async (delay) => {
-  const r = await encounter(delay);
+  const r = await encounter(250);
+  r.onPrepared(() => r.setTime(r.now() + delay));
   await r.feed(21000);
   expect(r.dispatchTimes).toEqual([]);
   expect(r.t.status()).toMatchObject({ state: 'ended', endReason: 'action_evidence_expired' });
@@ -216,23 +349,36 @@ it.each([716, 1360])('still refuses dispatch when preparation takes %i ms', asyn
 });
 
 it.each(['cancel', 'authority', 'emergency_disarm'] as const)(
-  'rejects %s during readiness',
+  'rejects %s after admission, before dispatch',
   async (condition) => {
     const r = rig();
     const abort = new AbortController();
-    r.onReadiness(
-      condition === 'cancel' ? () => abort.abort() : condition === 'authority' ? r.revoke : r.kill,
-    );
+    expect(await r.speaker.ready()).toBe(true);
+    (condition === 'cancel'
+      ? () => abort.abort()
+      : condition === 'authority'
+        ? r.revoke
+        : r.kill)();
     await expect(r.outputs.speak('fixture', abort.signal, () => true, r.guard())).rejects.toThrow();
     expect(r.dispatchTimes).toEqual([]);
+    expect(r.readinessCalls()).toBe(1);
     expect(r.rows).toContainEqual(
       expect.objectContaining({
         event: 'speech_output_failed',
-        stage: condition === 'cancel' ? 'readiness' : condition,
+        stage: condition === 'cancel' ? 'cancelled' : condition,
       }),
     );
   },
 );
+
+it('cancellation during the admission inspect is recorded without leaking', async () => {
+  const r = rig();
+  const abort = new AbortController();
+  r.onReadiness(() => abort.abort());
+  await expect(r.speaker.ready(abort.signal)).rejects.toThrow();
+  expect(r.rows).toContainEqual(expect.objectContaining({ event: 'speaker_readiness_failed' }));
+  expect(JSON.stringify(r.rows)).not.toContain(privateText);
+});
 
 it.each(['dispatch', 'acknowledgement'] as const)(
   'records %s failure, cleans up and never retries',
@@ -258,13 +404,17 @@ it.each(['dispatch', 'acknowledgement'] as const)(
 
 it('records malformed readiness and transport errors without leaking their content', async () => {
   const r = rig();
+  expect(await r.speaker.ready()).toBe(true);
   r.ssh.mockResolvedValueOnce(privateText);
-  await expect(
-    r.outputs.speak('fixture', new AbortController().signal, () => true, r.guard()),
-  ).rejects.toThrow();
+  await expect(r.speaker.ready()).rejects.toThrow();
   expect(r.rows).toContainEqual(
     expect.objectContaining({ event: 'speaker_readiness_failed', error_class: 'SyntaxError' }),
   );
+  // A failed re-inspect clears the earlier admission: nothing dispatches on it.
+  await expect(
+    r.outputs.speak('fixture', new AbortController().signal, () => true, r.guard()),
+  ).rejects.toThrow('audio_not_ready');
+  expect(r.dispatchTimes).toEqual([]);
   r.ssh.mockRejectedValueOnce(Object.assign(new Error(privateText), { code: 255 }));
   await expect(r.speaker.ready()).rejects.toThrow();
   expect(JSON.stringify(r.rows)).not.toMatch(/SECRET|private\.invalid/);
@@ -317,4 +467,22 @@ it('executes the generated read-only batch against offline command fixtures', as
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+it('readiness honours a required office level exactly and nothing else', async () => {
+  const ready = async (volume: number, requiredVolume?: number) =>
+    createSpeakerOutput({
+      ssh: async () => JSON.stringify({ ...healthy, volume }),
+      speakerFingerprint: fingerprint,
+      requiredVolume,
+      clip,
+      audit: () => {},
+      authorized: () => true,
+      killed: () => false,
+    }).ready();
+  expect(await ready(0.36, 0.36)).toBe(true);
+  expect(await ready(1, 0.36)).toBe(false);
+  expect(await ready(0.51, 0.36)).toBe(false);
+  expect(await ready(0.36)).toBe(false);
+  expect(await ready(1)).toBe(true);
 });

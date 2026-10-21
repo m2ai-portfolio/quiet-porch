@@ -3,8 +3,9 @@ import { createHash } from 'node:crypto';
 import { createYardMonitor } from './yard-monitor.ts';
 import { createAttendedObserver } from './attended-observer.ts';
 import { pollEncounterObservation } from './encounter-observation.ts';
+import { ModelUnavailableBreak, StaleResultBreak, type RecoveryCause } from './fresh-judgement.ts';
 import type { MotionWake } from './attended-source.ts';
-import type { TestScope, TestOutputs } from './attended-test.ts';
+import type { TestScope, TestOutputs, TestEvidence } from './attended-test.ts';
 import type { PipelineConfig } from './pipeline.ts';
 import type { Download } from './frames.ts';
 import type { ContentBlock } from './bedrock.ts';
@@ -18,6 +19,9 @@ export const boundedYardLimits = {
   frameTimeoutMs: 2000,
   modelTimeoutMs: 4000,
   drainMs: 5000,
+  // Used only when a run explicitly enables new-frame recovery; shared by every cause.
+  recoveries: 1,
+  recoveryDrainMs: 1000,
 } as const;
 
 export interface YardRunDependencies {
@@ -44,6 +48,9 @@ export interface YardRunDependencies {
   ) => Promise<string>;
   audit: (row: Record<string, unknown>) => void;
   reserve: (until: number) => void;
+  // Causes allowed to spend the run's one recovery on a NEW frame inside the same
+  // encounter: a typed model HTTP 503, and optionally a result that came back too old.
+  recoveryCauses?: readonly RecoveryCause[];
   signal?: AbortSignal;
   now?: () => number;
   mono?: () => number;
@@ -66,6 +73,15 @@ export async function runBoundedYard(deps: YardRunDependencies, delivery: YardRu
     ? AbortSignal.any([deps.signal, cancellation.signal])
     : cancellation.signal;
   const pending = new Set<Promise<unknown>>();
+  // Camera/model requests of the current observation, for the recovery drain check.
+  const observationRequests = new Set<Promise<unknown>>();
+  const causes = new Set(deps.recoveryCauses ?? []);
+  const unavailableRecovery = causes.has('model_unavailable_503');
+  const staleRecovery = causes.has('model_result_stale');
+  let recoveryCause: RecoveryCause | undefined;
+  let recoveryAttempts = 0,
+    dwellResets = 0,
+    resetFloor = -Infinity;
   let frames = 0,
     modelCalls = 0,
     observations = 0,
@@ -111,28 +127,50 @@ export async function runBoundedYard(deps: YardRunDependencies, delivery: YardRu
     if (row.event === 'alert_ack') alertAcks++;
     if (row.event === 'speak_ack') speechAcks++;
     if (row.event === 'followup_rejected' && row.reason === 'model_result_stale') staleResults++;
+    // The summary follows the controller's segments: a reset ends the current segment and
+    // no later evidence may bridge it, so reported dwell is never continuous across it.
+    if (row.event === 'dwell_reset') {
+      dwellResets++;
+      if (typeof row.failed_capture_ts === 'number')
+        resetFloor = Math.max(resetFloor, row.failed_capture_ts, lastCapture ?? -Infinity);
+      firstCapture = undefined;
+      lastCapture = undefined;
+    }
     // Only the controller's accepted evidence counts, never an observer-returned frame
     // subsequently rejected for predating arming, a capture gap or duplicate identity.
     if (row.event === 'evidence' && typeof row.capture_ts === 'number') {
       observations++;
       const age = now() - row.capture_ts;
-      if (age < 0 || age >= 6000) safetyViolation = true;
+      if (age < 0 || age >= 6000 || row.capture_ts <= resetFloor) safetyViolation = true;
       if (row.verdict === 'person') {
         if (lastCapture !== undefined && row.capture_ts - lastCapture >= 6000)
           safetyViolation = true;
         firstCapture ??= row.capture_ts;
         lastCapture = row.capture_ts;
-        maxDwell = lastCapture - firstCapture;
+        maxDwell = Math.max(maxDwell, lastCapture - firstCapture);
       }
     }
   };
-  const track = async <T>(operation: () => Promise<T>, requestSignal: AbortSignal) => {
+  const segmentDwell = () =>
+    firstCapture === undefined || lastCapture === undefined ? 0 : lastCapture - firstCapture;
+  const track = async <T>(
+    operation: () => Promise<T>,
+    requestSignal: AbortSignal,
+    group?: Set<Promise<unknown>>,
+  ) => {
     requestSignal.throwIfAborted();
     const request = Promise.resolve().then(operation);
     pending.add(request);
+    group?.add(request);
     void request.then(
-      () => pending.delete(request),
-      () => pending.delete(request),
+      () => {
+        pending.delete(request);
+        group?.delete(request);
+      },
+      () => {
+        pending.delete(request);
+        group?.delete(request);
+      },
     );
     let onAbort: () => void = () => {};
     const aborted = new Promise<never>((_resolve, reject) => {
@@ -172,7 +210,7 @@ export async function runBoundedYard(deps: YardRunDependencies, delivery: YardRu
         audit({
           event: live ? 'delivery_alert_attempt' : 'would_alert',
           remaining_freshness_ms: guard.remainingMs(),
-          dwell_ms: maxDwell,
+          dwell_ms: segmentDwell(),
         });
         if (delivery.mode === 'attended_delivery')
           await track(() => delivery.outputs.alert(id, outputSignal, allowed, guard), outputSignal);
@@ -187,7 +225,7 @@ export async function runBoundedYard(deps: YardRunDependencies, delivery: YardRu
         audit({
           event: live ? 'delivery_speech_attempt' : 'would_speak',
           remaining_freshness_ms: speechMargin,
-          dwell_ms: maxDwell,
+          dwell_ms: segmentDwell(),
         });
         if (delivery.mode === 'attended_delivery')
           await track(() => delivery.outputs.speak(id, outputSignal, allowed, guard), outputSignal);
@@ -223,6 +261,14 @@ export async function runBoundedYard(deps: YardRunDependencies, delivery: YardRu
     scope: deps.scope,
     config: deps.config,
     parallelCritique: true,
+    settleModelFailures: unavailableRecovery,
+    // Private run journal only, so an uncertain or disagreeing frame can be explained.
+    recordJudgementReasons: true,
+    // Only an unspent recovery in a started segment may turn a late result into a break.
+    breakOnStaleResult: () =>
+      staleRecovery &&
+      recoveryAttempts < boundedYardLimits.recoveries &&
+      monitor.current()?.status().encounterStarted === true,
     now,
     audit,
     allowed: () =>
@@ -243,6 +289,7 @@ export async function runBoundedYard(deps: YardRunDependencies, delivery: YardRu
             signal: requestSignal,
           }),
         requestSignal,
+        observationRequests,
       );
       if (result.image)
         audit({
@@ -253,14 +300,67 @@ export async function runBoundedYard(deps: YardRunDependencies, delivery: YardRu
         });
       return result;
     },
-    converse: async (content, onResponse) => {
+    converse: async (content, onResponse, observationSignal) => {
       if (modelCalls >= boundedYardLimits.modelCalls) throw new Error('qualification_model_cap');
       signal.throwIfAborted();
       modelCalls++;
-      const requestSignal = timedSignal(boundedYardLimits.modelTimeoutMs);
-      return track(() => deps.converse(content, requestSignal, onResponse), requestSignal);
+      const timed = timedSignal(boundedYardLimits.modelTimeoutMs);
+      const requestSignal = observationSignal ? AbortSignal.any([timed, observationSignal]) : timed;
+      return track(
+        () => deps.converse(content, requestSignal, onResponse),
+        requestSignal,
+        observationRequests,
+      );
     },
   });
+  // Returns true only when the failed observation is fully drained and the SAME encounter
+  // has restarted dwell; the caller then waits for a strictly newer frame. Anything else
+  // leaves the original failure to end the run exactly as before.
+  const recover = async (
+    encounter: NonNullable<ReturnType<typeof monitor.current>>,
+    error: unknown,
+  ) => {
+    if (
+      !(error instanceof ModelUnavailableBreak || error instanceof StaleResultBreak) ||
+      !causes.has(error.reason) ||
+      recoveryAttempts >= boundedYardLimits.recoveries ||
+      // A late result before any dwell exists must never spend the recovery.
+      (error instanceof StaleResultBreak && encounter.status().encounterStarted !== true)
+    )
+      return false;
+    recoveryAttempts++;
+    recoveryCause = error.reason;
+    audit({
+      event: 'qualification_recovery_started',
+      reason: error.reason,
+      failed_capture_ts: error.captureTs,
+    });
+    const refuse = (reason: string) => {
+      audit({ event: 'qualification_recovery_refused', reason });
+      return false;
+    };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const drained = await Promise.race([
+      Promise.allSettled([...observationRequests]).then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), boundedYardLimits.recoveryDrainMs);
+      }),
+    ]);
+    clearTimeout(timer);
+    if (!drained || observationRequests.size > 0) return refuse('observation_not_drained');
+    if (
+      signal.aborted ||
+      monitor.current() !== encounter ||
+      encounter.status().state !== 'armed' ||
+      !deps.authorized() ||
+      deps.killed()
+    )
+      return refuse('encounter_not_armed_or_authority_lost');
+    if (!(await encounter.restartDwell(error.captureTs, error.reason)))
+      return refuse('dwell_not_restartable');
+    audit({ event: 'qualification_recovered', reason: error.reason });
+    return true;
+  };
   const check = async () => {
     if (mono() < started) {
       fault = true;
@@ -309,7 +409,13 @@ export async function runBoundedYard(deps: YardRunDependencies, delivery: YardRu
       if (!admitted && mono() - started >= boundedYardLimits.wakeAdmissionMs) break;
       const current = monitor.current();
       if (current?.status().state === 'armed') {
-        const frame = await pollEncounterObservation(current, () => observer.poll(), audit);
+        let frame: TestEvidence | undefined;
+        try {
+          frame = await pollEncounterObservation(current, () => observer.poll(), audit);
+        } catch (error) {
+          // A late result stays a silent drop when not recovered; only a 503 becomes a fault.
+          if (!(await recover(current, error)) && !(error instanceof StaleResultBreak)) throw error;
+        }
         await track(() => monitor.tick(), signal);
         if (frame) {
           const age = now() - frame.captureTs;
@@ -394,7 +500,13 @@ export async function runBoundedYard(deps: YardRunDependencies, delivery: YardRu
     model_calls: modelCalls,
     observations,
     stale_results: staleResults,
+    // Longest single continuous segment; segments separated by a reset are never summed.
     max_dwell_ms: maxDwell,
+    model_unavailable_recovery: unavailableRecovery ? 'enabled' : 'disabled',
+    stale_result_recovery: staleRecovery ? 'enabled' : 'disabled',
+    recovery_attempts: recoveryAttempts,
+    recovery_cause: recoveryCause,
+    dwell_resets: dwellResets,
     alert_attempts: alertAttempts,
     speech_attempts: speechAttempts,
     alert_acknowledgements: alertAcks,

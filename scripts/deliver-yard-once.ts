@@ -13,9 +13,13 @@ import { DatabaseSync } from 'node:sqlite';
 import { runBoundedYard } from '../src/bounded-yard.ts';
 import {
   claimDeliveryRun,
+  deliveryAlertText,
   deliveryClip,
   deliveryScopePath,
   deliverySpeaker,
+  deliveryAuthorityActive,
+  deliveryWindowOpen,
+  deliveryTestConfig,
   fingerprint,
   validateDeliveryPolicy,
   type DeliveryPolicy,
@@ -25,7 +29,6 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { parsePipelineConfig } from '../src/pipeline.ts';
 import { readMotionWakeups } from '../src/attended-source.ts';
-import { inWindow } from '../src/decide.ts';
 import { bedrockConfigFromEnv, converse } from '../src/bedrock.ts';
 import { downloadImageAt } from '../src/ring.ts';
 import type { TestScope } from '../src/attended-test.ts';
@@ -101,7 +104,7 @@ if (
     );
   let claim: ReturnType<typeof claimDeliveryRun> | undefined;
   const authorized = () =>
-    Date.now() < policy.expiresAt &&
+    deliveryAuthorityActive(policy) &&
     config().dryRun === true &&
     config().zones[binding.scope.deviceId] === binding.scope.zone &&
     !existsSync(resolve(state, 'YARD-MONITOR.lock')) &&
@@ -148,13 +151,28 @@ if (
     const speaker = createSpeakerOutput({
       ssh,
       speakerFingerprint: deliverySpeaker,
+      requiredVolume: policy.speakerVolume,
       clip: deliveryClip,
       authorized,
+      authorityRemainingMs: () =>
+        Math.min(policy.expiresAt, policy.daylightTest?.expiresAt ?? Infinity) - Date.now(),
       killed,
       audit,
     });
     if (!(await speaker.ready(abort.signal)) || !authorized() || killed())
       throw new Error('speaker_preflight_failed');
+    audit({
+      event: 'attended_delivery_context',
+      daylight_test: policy.daylightTest !== undefined,
+      simulated_mode: policy.daylightTest ? 'away' : undefined,
+      daylight_expires_at: policy.daylightTest?.expiresAt,
+      test_setting: policy.testSetting ?? 'configured_zone',
+      speech_clip_role:
+        policy.testSetting === 'office' ? 'playback_fixture_not_location_claim' : undefined,
+      new_frame_recovery: policy.recovery ? 'one_new_frame' : 'disabled',
+      recovery_causes: policy.recovery?.causes ?? [],
+      speaker_volume_required: policy.speakerVolume ?? 'speaker_default',
+    });
     // The cursor is captured after preflight: only subsequent ingested wakes are eligible.
     console.log(
       JSON.stringify({
@@ -169,15 +187,13 @@ if (
         scope: binding.scope,
         modelId: model.modelId,
         region: model.region,
-        config,
+        config: () => deliveryTestConfig(policy, config()),
         authorized,
         initialCooldown,
+        recoveryCauses: policy.recovery?.causes ?? [],
         signal: abort.signal,
         killed,
-        night: () => {
-          const cfg = config();
-          return inWindow(Date.now(), cfg.nightWindow.start, cfg.nightWindow.end, cfg.timezone);
-        },
+        night: () => deliveryWindowOpen(policy, config()),
         cursor: Number(db.prepare('SELECT COALESCE(MAX(id),0) AS id FROM events').get()?.id),
         readWakes: (cursor) => readMotionWakeups(db, cursor, binding.scope, Date.now()),
         download: async (_account, device, timestamp, options) => {
@@ -224,7 +240,7 @@ if (
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   chat_id: telegramChat,
-                  text: `Quiet Porch attended yard test ${id}: person observed at the front yard. One-encounter test; automatic stop is enabled.`,
+                  text: deliveryAlertText(policy, id),
                 }),
               },
             );

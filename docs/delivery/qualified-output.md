@@ -15,7 +15,11 @@ a separately approved transport test; the candidate was run only as a bounded at
   The ongoing candidate requires the guarded protocol and never silently falls back.
 - Readiness supplies the Pi boot ID and CLOCK_BOOTTIME sample. The caller adds remaining
   freshness measured at receipt, conservatively accounting for transport without assuming
-  synchronized wall clocks. The same deadline applies after SSH, lock wait, preparation,
+  synchronized wall clocks. Dispatch reuses the admission sample, projected forward by the
+  local time elapsed since receipt, instead of a second round trip: replay-7 on October 21
+  reached speech with 536 ms of freshness, spent 367 ms on a pre-dispatch inspect and was
+  refused by the Pi at a 168 ms deadline. The helper still re-checks sink, volume, stop
+  epoch and boot ID at dispatch. The same deadline applies after SSH, lock wait, preparation,
   systemd queueing and immediately before the player is launched.
 - Both helper stages require the approved speaker identity and 100% readback, pin that
   output, preserve stop-epoch ordering, and keep `RuntimeMaxSec=4`. The wrapper releases
@@ -126,3 +130,226 @@ The run's approval is consumed. A further attended encounter requires fresh appr
 private Ring imagery and bounded Telegram/speaker outputs. Success still requires the expected
 Telegram and owner-heard speech from the same encounter. No model/routing change, IAM change,
 sprinkler or light output is included. The owner ended testing for the night.
+
+## Expiring attended daylight test
+
+The one-shot policy optionally includes `daylightTest: { startsAt, expiresAt }`, with a
+maximum six-minute interval bounded by the policy expiry. Without it, normal night-only
+admission remains. With it, expiry ends authority even if the regular night window begins.
+The test uses an audited in-memory `away` context so a daytime person can qualify; persistent
+household configuration, visitor/routine vetoes, actual capture times and the night window
+are preserved. Daytime wildlife remains excluded. Ongoing monitoring is unchanged.
+
+The one-shot speaker transfers the shorter of remaining capture freshness and remaining
+policy authority to the Pi. The existing remote helper checks that deadline after queuing,
+preventing speech from starting after the test expires. No physical output is retried.
+Focused checks cover default-night behavior, daytime admission, config preservation, expiry
+during readiness/judgement/delivery, and remote launch delayed past expiry.
+
+## October 21 daylight repeat
+
+The owner-approved repeat listened from 10:02:43 CDT, armed on a real Ring wake about
+10:03:03 and stopped at 10:03:20. It retrieved five images and made ten model calls. The
+first frame's pair finished 107 ms past the six-second limit and was rejected. Three
+accepted person observations then established 6,936 ms of capture-time dwell, below the
+10-second alert threshold. The fifth frame's perception call returned HTTP 503 at 4,781 ms
+image age while critique returned 200, which ended the encounter. There were zero Telegram
+or speech attempts; cleanup and drain succeeded. Real event delivery and accepted person
+observations are shown. Output delivery is not.
+
+## One-shot new-frame recovery after a model 503 or a stale result (offline candidate)
+
+A delivery policy may add exactly one of two recovery shapes; any other shape, including
+the earlier `{ modelUnavailable503: 1 }`, is refused:
+
+- `{ newFrameRecoveries: 1, causes: ['model_unavailable_503'] }`
+- `{ newFrameRecoveries: 1, causes: ['model_unavailable_503', 'model_result_stale'] }`
+
+Without it, behavior is unchanged. Both causes share one recovery per run: whichever fails
+first spends it.
+
+**503 cause.** The parallel judgement settles both
+calls for a frame before reporting. A typed Bedrock HTTP 503 aborts the frame's other call,
+and the failure becomes `ModelUnavailableBreak` only when that call settled successfully,
+was cancelled by us or also returned 503. The runner then waits up to one second for every
+camera/model request of the observation to settle. If the same encounter is still armed and
+authorized, it calls `restartDwell`.
+
+`restartDwell` discards continuous dwell and sets a floor at the failed frame's capture time,
+so neither that frame nor anything older can start the next segment. Encounter identity,
+the 60-second deadline, seen evidence, alert/speech flags, request counters and cooldown
+are untouched, so an alert already sent is never repeated. The run summary follows the same
+segments: `max_dwell_ms` is the longest single segment and is never bridged across a reset.
+A second 503, a different sibling failure, undrained work, revocation, kill, cancellation or
+expiry stops the run as before. Freshness stays at six seconds.
+
+**Stale cause.** Only a judgement that completed but came back six seconds or more after
+capture counts. A frame already too old or repeated when it arrives is not covered, and a
+reversed clock is never treated as stale. The observer asks the runner first; it raises
+`StaleResultBreak` only when the stale cause is listed, the recovery is unspent and the
+encounter has started a dwell segment. A late result before any dwell exists (as in the
+October 21 daylight repeat's first frame) therefore leaves the recovery unused. Otherwise
+the late result is dropped silently exactly as before and the encounter ends on its own
+`evidence_lost` rule. A stale result never becomes evidence and never becomes a fault,
+including when the controller refuses the restart because evidence is already lost. The
+`dwell_reset` row and the run summary (`recovery_cause`) record which cause was used.
+
+## Office test labeling
+
+A policy may add `testSetting: 'office'`. It is applied only in memory, and only while the
+policy is active. The critique prompt then states that the camera is temporarily indoors
+and that the zone is its configured name. Since office attempt 5's candidate it also states that
+being indoors, a missing yard scene or a zone-name mismatch is never a reason for `uncertain`,
+and that the normal verdict rules apply to whoever is visible (see office attempt 4). The Telegram text says it is a supervised OFFICE
+test. The context audit row records the setting and marks the cached front-yard sentence as
+a playback fixture. The persistent camera binding, zone mapping and household configuration
+do not change. The perception prompt is unchanged. The office wording was first sent to the
+model in office attempt 2 (below); its effect on the critique is not yet explained.
+
+An office policy may also set `speakerVolume` (two decimals, above 0 and at most 1). Speaker
+readiness then requires exactly that readback instead of 100%, so drift from it still
+refuses; the speaker ceilings are unchanged. Any other policy carrying it is refused. The
+first office launch on October 21 stopped at readiness with the Pi reading 36%, before any
+image, model, Telegram or speech request; Matt then accepted 36% for indoor tests.
+
+Focused checks: `test/model-unavailable-recovery.test.ts` (28 cases before reason logging) covers renewed 10/20 s
+dwell, recovery after an alert without a second alert, a second 503, sibling timeout/parse/500
+failures, an untyped "503" message, a sibling that ignores cancellation, revocation, kill,
+cancellation and expiry during the drain, a repeated failed frame, the unchanged 60 s deadline
+and counters, segment-only summary dwell, the default-off path, policy shapes and office labels.
+The stale cases cover a stale result mid-encounter (one alert, one speech, the stale frame
+never evidence), a stale result before the encounter (recovery left for a later 503), the
+503-only policy matching no recovery event-for-event, a 503 then a stale result, a stale
+result then a 503, a refused stale restart, and the observer's reversed-clock and
+absent-predicate cases. A mutation sweep of the stale guards killed 13 of 15 single
+mutations. The two survivors are second-layer checks in the runner's `recover` whose first
+layer (the observer's stale predicate, and the 503-only sibling settling) blocks the same
+input; removing each together with its first layer was killed.
+
+## October 21 office attempt 2
+
+The second office launch armed on a real Ring human wake at 11:15:24 CDT with the speaker
+reading 36%. Two frames were judged fresh (5,485 and 5,418 ms at completion). The critique
+returned `uncertain` for both (`decision: log`, `reason: critique_uncertain`), so the
+encounter ended uncertain. There were no 503 or stale results, zero Telegram and zero speech
+attempts; safety, cleanup and drain passed. The journal kept only the verdict label, so the
+cause of the uncertain critique cannot be determined from that run.
+
+## Judgement reasons in the private run journal (offline candidate)
+
+The attended observer takes `recordJudgementReasons`, off by default, so ongoing monitoring
+rows are byte-for-byte unchanged. The bounded runner turns it on. Every judged-frame row then
+carries two objects built from the raw parsed model output, each re-checked field by field:
+
+- `perception`: `person_present` and `night_ir` (booleans only), `activity`, and at most five
+  `subjects` whose class is in the fixed list and whose confidence is a number from 0 to 1.
+- `critique`: `verdict` (only a listed verdict), `person_present` (boolean only) and at most
+  five `reasons`.
+
+Rows covered: `followup_observation` (including an `independent_judgement_disagreement`
+rejection) and the `model_result_stale` `followup_rejected` row. Strings are read only from
+data properties (getters are never invoked), cut to 2,000 characters before any pattern runs,
+then: line breaks become spaces, other control, zero-width and bidi characters are removed,
+URLs and data URIs and token-like runs (24+ key characters, AWS key ids) become `[redacted]`,
+whitespace is collapsed, and the result is cut to 160 code points. Non-strings and empty
+strings are dropped. No image bytes or base64 are written. A failure reading one half leaves
+the other. Rows go only to the private `observations.private.jsonl`; `summary.json` and
+`result.json` are unchanged.
+
+Focused checks: `test/judgement-reasons.test.ts` (10 cases: truncation, controls, redaction,
+type filtering, caps, hostile getters, option off and on, disagreement and stale rows) and one
+bounded-run case in `test/model-unavailable-recovery.test.ts` (reasons on observed and stale
+rows, no pixels). A mutation sweep of the sanitizer, the option and the runner wiring killed
+24 of 24 single mutations.
+
+## October 21 office attempts 3 and 4
+
+Attempt 3 armed on an `other_motion` wake (received about 11.4 s after the event). Ring
+answered `416` to all 28 frame requests until the 60-second session expired, so no model call
+was made (F-01, F-02). Zero Telegram and speech; cleanup and drain passed.
+
+Attempt 4 armed on a `human` wake at 11:45:59 CDT with reason logging on. Frame 1 (person
+0.98, critique `unknown`) was captured before arming and rejected as designed. Frame 2 (person
+0.99, fresh at 5,620 ms) got critique `uncertain`, which ended the encounter. The journaled
+critique reasons were "indoor office environment visible not a yard scene", "camera
+configured as front_yard but currently indoors per supervised test note" and "cannot assess
+outdoor context from this frame": the office note itself led the critique to abstain.
+Perception also reported `night_ir: true` on both daytime indoor frames. Zero Telegram and
+speech; cleanup and drain passed.
+
+The office note now tells the critique that the indoor setting is never grounds for
+`uncertain` and to apply the unchanged verdict rules to whoever is visible. The check in
+`test/model-unavailable-recovery.test.ts` asserts the new sentences, that they precede the
+verdict rules, and that removing the two office lines leaves exactly the non-office prompt.
+The effect on a live critique is untested until the next office attempt.
+
+## October 21 office attempt 5
+
+With note v2 the critique returned `unknown` on 5 of 6 judged frames. Three perception results
+came back too old (6,087, 6,334 and 6,093 ms at completion, perception 3,395 to 3,559 ms); the
+run's one recovery was spent on the first. The last frame's critique returned `benign`
+("consistent with household member routine"), which ended the encounter without an alert.
+Zero Telegram and speech; safety, cleanup and drain passed. Over 287 server perception calls
+since October 7 the median is 2,685 ms and the 90th percentile 3,589 ms; 18% take 3.3 s or more
+and slow calls come in runs of up to 5. Critique stays at 2.0 to 2.4 s.
+
+## Per-call token usage in the private run journal (offline candidate)
+
+Diagnostic only: no prompt, threshold, freshness limit, recovery or output changes. After a
+JSON body is read, the Bedrock client calls `onResponse` a second time with the provider's
+`usage` and `stopReason`, before the empty-text check, so a `max_tokens` answer still reports
+it. The judgement adds `input_tokens` and `output_tokens` (whole numbers from 0 to 1,000,000)
+and `stop_reason` (only `end_turn`, `max_tokens`, `stop_sequence`, `tool_use`,
+`guardrail_intervened` or `content_filtered`) to `model_completed` rows, and to `model_failed`
+rows after a body was read. Values are read only from data properties; anything else is
+dropped. Every other row field is unchanged. Rows go only to the private
+`observations.private.jsonl`.
+
+Focused checks: two cases in `test/bedrock.test.ts` (callback order, usage on an empty
+answer), two in `test/monitor-diagnostics.test.ts` (sanitizer bounds and hostile values; the
+exact `model_completed` row) and one bounded-run case in
+`test/model-unavailable-recovery.test.ts` (the real client over a fake transport puts token
+counts on every completed call). A mutation sweep killed 15 of 15 single mutations.
+
+## Bounded office session and labelled delivery replay (offline candidate)
+
+Two new owner-approved modes, each with its own single-use approval through the same ledger and
+`ATTENDED-TEST.lock` as the one-encounter test. Neither changes a per-encounter limit, the 6 s
+freshness gate, the 10/20 s dwell gates, recovery, or the durable cooldown. The one-encounter
+policy, validator and `scripts/deliver-yard-once.ts` are unchanged.
+
+**Session** (`bounded-attended-session`, `scripts/deliver-yard-session.ts`): one approval covers
+an office session starting within 15 minutes and lasting at most 60, with up to 3 encounters,
+session totals of 90 frames, 180 model calls, 1 Telegram message and 1 speech. It runs the
+unchanged `runBoundedYard` once per slot. A slot starts only after `startsAt`, after the shared
+cooldown, and only if it can finish (wake admission, encounter, drain) before expiry. A quiet
+slot consumes no encounter. The session stops at the first alert or speech attempt, after 3
+encounters, at the totals, at expiry, on KILL, authority loss, cancellation, or any slot that
+is not a clean result. It never restarts itself.
+
+Re-arm differs from the design note: every encounter already reserves a durable 10 to 11 minute
+cooldown (`yard-monitor.ts`), so the next encounter starts after that cooldown, not 30 s
+later; shortening it would have loosened a safety limit. Wakes stamped before the previous
+encounter ended are logged and never admitted. The journal adds `session_waiting` once a
+minute (with time since the last wake), `session_wake_seen` per wake, and a summary with
+`slots`, `encounters`, per-encounter outcomes, `wakes_seen` and `longest_quiet_ms`, so a camera
+that stops detecting is visible from the run directory alone.
+
+**Replay** (`labelled-delivery-replay`, `scripts/deliver-replay-once.ts`): one approved
+recorded Ring person still (`ring-door-person`, `ring-person-garden` or `ring-person-car`,
+pinned by SHA-256) through the real judgement, Telegram and Pi speaker, with no camera call:
+the CLI imports no Ring client and never reads camera tokens. One synthesized wake is logged as
+such; every served frame is the same still stamped with its request time and logged with its
+hash, so it is about 2 s old when served and slow judgement is still rejected as stale. The
+Telegram text starts with `REPLAY of <fixture> (not live)`. A replay proves the delivery chain
+only, not live wake, camera media or real dwell; dwell from a held still is a replay artifact.
+It respects and reserves the shared cooldown like a live run.
+
+Focused checks: `test/attended-session-policy.test.ts` (every bound accepted at the limit and
+rejected one past it; the three operations never validate as one another; window-only
+authority and context), `test/attended-session.test.ts` (start wait, quiet slots, cooldown and
+re-arm, first output, totals including a swallowed cap error, faults, KILL, authority loss,
+cancellation, and the real engine across an empty encounter, the cooldown and one delivery)
+and `test/delivery-replay.test.ts` (fixture bytes, one wake, request-time stamps, the real
+engine to one alert and one speech, stale rejection, no camera reach). A mutation sweep killed
+33 of 33 single mutations. Private launcher: `launch-hands-off.py session|replay`.

@@ -15,6 +15,9 @@ import sys
 import time
 
 APPROVED_SPEAKER = '12b20969fc2c'
+# Exact readbacks only: 100% approved for this Anker on 2026-10-21, and the 36% office
+# level Matt accepted indoors the same day. Any other level, or a muted sink, refuses.
+APPROVED_VOLUMES = ('Volume: 1.00', 'Volume: 0.36')
 
 
 class Refusal(Exception):
@@ -67,7 +70,7 @@ def checked_sink(fingerprint):
     if not re.fullmatch(r'(?:[A-F0-9]{2}:){5}[A-F0-9]{2}', address) or \
             hashlib.sha256(address.encode()).hexdigest()[:12] != fingerprint:
         raise Refusal('refused_speaker')
-    if output(['wpctl', 'get-volume', node[1]]) != 'Volume: 1.00':
+    if output(['wpctl', 'get-volume', node[1]]) not in APPROVED_VOLUMES:
         raise Refusal('refused_volume')
     return match[1]
 

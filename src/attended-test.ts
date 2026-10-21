@@ -1,6 +1,7 @@
 // One-shot attended test. No HA adapter, general live switch, or automatic re-arm exists here.
 import { randomUUID } from 'node:crypto';
 import { diagnostic, safeError } from './monitor-diagnostics.ts';
+import type { RecoveryCause } from './fresh-judgement.ts';
 import {
   ActionEvidenceExpiredError,
   ActionGuardError,
@@ -43,7 +44,11 @@ export function createAttendedTest(deps: {
   let started = 0,
     first = 0,
     last = 0,
-    lastSeen = 0;
+    lastSeen = 0,
+    // After a dwell reset nothing captured at or before this time may start a segment.
+    floor = -Infinity,
+    segments = 0,
+    dwellResets = 0;
   let entered = false,
     alerted = false,
     spoken = false,
@@ -153,6 +158,7 @@ export function createAttendedTest(deps: {
       cleanupSucceeded,
       endReason,
       encounterStarted: entered,
+      dwellResets,
     }),
     async arm() {
       if (state !== 'disarmed') throw new Error('one_shot_session');
@@ -209,6 +215,7 @@ export function createAttendedTest(deps: {
             age >= 6000 ||
             ev.captureTs < wall() - (mono() - started) ||
             seen.has(ev.id) ||
+            ev.captureTs <= floor ||
             (entered && ev.captureTs <= last)
           ) {
             record('rejected_evidence');
@@ -227,7 +234,7 @@ export function createAttendedTest(deps: {
           if (!entered) {
             first = ev.captureTs;
             entered = true;
-            record('encounter_started');
+            record(segments++ === 0 ? 'encounter_started' : 'dwell_restarted');
           }
           last = ev.captureTs;
           lastSeen = mono();
@@ -257,6 +264,29 @@ export function createAttendedTest(deps: {
           await end(reason);
         });
       return queue;
+    },
+    // Discards continuous dwell after a failed observation the controller never received.
+    // Encounter identity, its 60-second deadline, seen evidence and output flags remain,
+    // so an alert already sent is never repeated. Refused once evidence is already lost.
+    restartDwell(failedCaptureTs: number, reason: RecoveryCause): Promise<boolean> {
+      const restarted = queue.then(async () => {
+        if (state !== 'armed' || !Number.isFinite(failedCaptureTs) || !safe()) return false;
+        floor = Math.max(floor, last, failedCaptureTs);
+        entered = false;
+        dwellResets++;
+        record('dwell_reset', {
+          reason,
+          failed_capture_ts: failedCaptureTs,
+          alerted,
+          spoken,
+        });
+        return true;
+      });
+      queue = restarted.then(
+        () => undefined,
+        () => undefined,
+      );
+      return restarted;
     },
     tick,
     disarm: (reason = 'emergency_disarm') => end(reason),

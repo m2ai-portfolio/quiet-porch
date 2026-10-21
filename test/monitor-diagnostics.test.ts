@@ -3,7 +3,7 @@ import { converse, type ContentBlock } from '../src/bedrock.ts';
 import { createAttendedObserver } from '../src/attended-observer.ts';
 import { judgeFreshFrame } from '../src/fresh-judgement.ts';
 import { createYardMonitor } from '../src/yard-monitor.ts';
-import { safeError, stopForRuntimeFault } from '../src/monitor-diagnostics.ts';
+import { safeError, safeUsage, stopForRuntimeFault } from '../src/monitor-diagnostics.ts';
 import type { PipelineConfig } from '../src/pipeline.ts';
 
 const scope = { accountId: 'PRIVATE_OWNER', deviceId: 'PRIVATE_CAMERA', zone: 'front_yard' };
@@ -530,4 +530,98 @@ it('diagnostics do not relax the six-second completed-result freshness gate', as
   });
   expect(await observer.poll()).toBeUndefined();
   expect(audit).toHaveBeenCalledWith({ event: 'followup_rejected', reason: 'model_result_stale' });
+});
+
+it('keeps only whole token counts and fixed stop labels, without invoking getters', () => {
+  expect(safeUsage({ inputTokens: 1520, outputTokens: 0, stopReason: 'end_turn' })).toEqual({
+    input_tokens: 1520,
+    output_tokens: 0,
+    stop_reason: 'end_turn',
+  });
+  expect(safeUsage({ inputTokens: 1_000_000, outputTokens: 1_000_001 })).toEqual({
+    input_tokens: 1_000_000,
+  });
+  const getter = vi.fn(() => 5);
+  const withGetter = { stopReason: 'max_tokens' };
+  Object.defineProperty(withGetter, 'inputTokens', { get: getter });
+  expect(safeUsage(withGetter)).toEqual({ stop_reason: 'max_tokens' });
+  expect(getter).not.toHaveBeenCalled();
+  for (const bad of [
+    undefined,
+    null,
+    privateText,
+    { inputTokens: -1, outputTokens: 2.5, stopReason: privateText },
+    { inputTokens: NaN, outputTokens: Infinity, stopReason: 'END_TURN' },
+    { inputTokens: '12', outputTokens: 12n, stopReason: { toString: () => 'end_turn' } },
+    new Proxy(
+      {},
+      {
+        getOwnPropertyDescriptor: () => {
+          throw new Error(privateText);
+        },
+      },
+    ),
+  ])
+    expect(safeUsage(bad)).toEqual({});
+});
+
+it('adds checked per-call token usage to model_completed and changes nothing else in the row', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(100000);
+  const audit = vi.fn();
+  const usage = {
+    perception: { inputTokens: 1520, outputTokens: 61, stopReason: 'end_turn' },
+    critique: { inputTokens: -4, outputTokens: 33, stopReason: privateText },
+  };
+  await judgeFreshFrame(
+    jpeg,
+    98000,
+    id,
+    scope.zone,
+    cfg,
+    async (content, onResponse) =>
+      (
+        await converse({ region: 'fixture', modelId: 'fixture', apiKey: 'SECRET' }, content, {
+          onResponse,
+          fetchImpl: vi.fn(
+            async () =>
+              new Response(
+                JSON.stringify({
+                  output: { message: { content: [{ text: response(content) }] } },
+                  stopReason: usage[isCritique(content) ? 'critique' : 'perception'].stopReason,
+                  usage: usage[isCritique(content) ? 'critique' : 'perception'],
+                }),
+                { status: 200, headers: { 'x-amzn-requestid': requestId } },
+              ),
+          ) as typeof fetch,
+        })
+      ).text,
+    { audit },
+  );
+  const completed = audit.mock.calls.map(([r]) => r).filter((r) => r.event === 'model_completed');
+  const base = {
+    event: 'model_completed',
+    stage: 'model_request',
+    started_at: 100000,
+    completed_at: 100000,
+    duration_ms: 0,
+    capture_ts: 98000,
+    age_at_completion_ms: 2000,
+    http_status: 200,
+    request_id: requestId,
+  };
+  expect(completed).toEqual(
+    expect.arrayContaining([
+      {
+        ...base,
+        model: 'perception',
+        input_tokens: 1520,
+        output_tokens: 61,
+        stop_reason: 'end_turn',
+      },
+      { ...base, model: 'critique', output_tokens: 33 },
+    ]),
+  );
+  expect(completed).toHaveLength(2);
+  expect(JSON.stringify(audit.mock.calls)).not.toMatch(/SECRET|private\.invalid|PRIVATE_OWNER/);
 });

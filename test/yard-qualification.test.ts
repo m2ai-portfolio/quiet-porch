@@ -2,10 +2,16 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { runYardQualification, qualificationLimits } from '../src/yard-qualification.ts';
 import type { ContentBlock } from '../src/bedrock.ts';
 import type { PipelineConfig } from '../src/pipeline.ts';
+import {
+  deliveryAuthorityActive,
+  deliveryWindowOpen,
+  deliveryTestConfig,
+  type DeliveryPolicy,
+} from '../src/attended-delivery-policy.ts';
 
 afterEach(() => vi.useRealTimers());
-function rig(wakeDelayMs = 0) {
-  const start = Date.UTC(2026, 9, 21, 3, 0);
+function rig(wakeDelayMs = 0, hour = 3) {
+  const start = Date.UTC(2026, 9, 21, hour, 0);
   let time = start,
     wakes = true,
     person = true;
@@ -236,8 +242,8 @@ it('monotonic reversal cannot pass qualification', async () => {
 
 // Real transports are mocked: these test authority and observable delivery sequencing.
 import { runBoundedYard } from '../src/bounded-yard.ts';
-function deliveryRig() {
-  const r = rig();
+function deliveryRig(hour = 3) {
+  const r = rig(0, hour);
   const outputs = {
     alert: vi.fn(async () => {}),
     speak: vi.fn(async () => {}),
@@ -246,6 +252,82 @@ function deliveryRig() {
   const delivery = { mode: 'attended_delivery' as const, ready: vi.fn(async () => true), outputs };
   return { ...r, delivery, outputs };
 }
+
+function daytimeDeliveryRig(daylight = true, durationMs = 60000) {
+  const r = deliveryRig(12);
+  const start = r.deps.now!();
+  const cfg = r.deps.config();
+  cfg.context.mode = 'home';
+  // The CLI validates full bindings before constructing these dependencies.
+  const policy = {
+    expiresAt: start + 360000,
+    ...(daylight ? { daylightTest: { startsAt: start, expiresAt: start + durationMs } } : {}),
+  } as DeliveryPolicy;
+  r.deps.authorized = () => deliveryAuthorityActive(policy, r.deps.now!());
+  r.deps.night = () => deliveryWindowOpen(policy, cfg, r.deps.now!());
+  r.deps.config = () => deliveryTestConfig(policy, cfg, r.deps.now!());
+  return { ...r, originalConfig: cfg };
+}
+
+it('daytime home mode needs explicit one-shot authority before any camera or output operation', async () => {
+  const r = daytimeDeliveryRig(false);
+  const result = await runBoundedYard(r.deps, r.delivery);
+  expect(result.frames).toBe(0);
+  expect(r.download).not.toHaveBeenCalled();
+  expect(r.outputs.alert).not.toHaveBeenCalled();
+  expect(r.outputs.speak).not.toHaveBeenCalled();
+});
+
+it('an explicit daytime test delivers once while leaving the household configuration unchanged', async () => {
+  const r = daytimeDeliveryRig();
+  const result = await runBoundedYard(r.deps, r.delivery);
+  expect(result).toMatchObject({
+    transport_result: 'acknowledged',
+    alert_attempts: 1,
+    speech_attempts: 1,
+    drained: true,
+  });
+  expect(r.originalConfig.context.mode).toBe('home');
+  expect(r.originalConfig.nightWindow).toEqual({ start: '20:00', end: '06:30' });
+});
+
+it('daylight expiry during readiness prevents image requests and outputs', async () => {
+  const r = daytimeDeliveryRig(true, 1000);
+  r.delivery.ready.mockImplementation(async () => {
+    r.advance(1000);
+    return true;
+  });
+  const result = await runBoundedYard(r.deps, r.delivery);
+  expect(result.drained).toBe(true);
+  expect(r.download).not.toHaveBeenCalled();
+  expect(r.outputs.alert).not.toHaveBeenCalled();
+  expect(r.outputs.speak).not.toHaveBeenCalled();
+});
+
+it('daylight expiry during judgement drains requests and prevents outputs', async () => {
+  const r = daytimeDeliveryRig(true, 1000);
+  const original = r.converse.getMockImplementation()!;
+  r.converse.mockImplementation(async (content) => {
+    r.advance(1000);
+    return original(content);
+  });
+  const result = await runBoundedYard(r.deps, r.delivery);
+  expect(result.drained).toBe(true);
+  expect(r.outputs.alert).not.toHaveBeenCalled();
+  expect(r.outputs.speak).not.toHaveBeenCalled();
+  expect(r.deps.config()).toBe(r.originalConfig);
+});
+
+it('daylight expiry after a Telegram attempt prevents speech and still cleans up', async () => {
+  const r = daytimeDeliveryRig();
+  r.outputs.alert.mockImplementation(async () => {
+    r.advance(60000);
+  });
+  const result = await runBoundedYard(r.deps, r.delivery);
+  expect(result).toMatchObject({ alert_attempts: 1, speech_attempts: 0, drained: true });
+  expect(r.outputs.speak).not.toHaveBeenCalled();
+  expect(r.outputs.stop).toHaveBeenCalledTimes(1);
+});
 it('one real-output encounter reserves cooldown before exactly one alert and speech', async () => {
   const r = deliveryRig();
   const order: string[] = [];

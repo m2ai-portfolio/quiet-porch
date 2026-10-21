@@ -1,6 +1,6 @@
 // Two independent image judgements run concurrently on the SAME frame. This removes
 // sequential model latency without skipping critique or borrowing it from older pixels.
-import { imageBlock, parseModelJson, type ContentBlock } from './bedrock.ts';
+import { BedrockHttpError, imageBlock, parseModelJson, type ContentBlock } from './bedrock.ts';
 import { perceptionPrompt, validatePerception, personEvidence } from './perception.ts';
 import { validateCritique, VERDICTS } from './critique.ts';
 import { decide, inWindow } from './decide.ts';
@@ -10,9 +10,42 @@ import {
   safeError,
   safeHttpStatus,
   safeRequestId,
+  safeUsage,
   type DiagnosticAudit,
   type DiagnosticConverse,
 } from './monitor-diagnostics.ts';
+
+// Only a typed provider 503 qualifies. Timeouts, parse failures, other statuses and
+// untyped errors with a similar message are never recoverable.
+export function isModelUnavailable(error: unknown): boolean {
+  return error instanceof BedrockHttpError && error.status === 503;
+}
+
+// Raised only after BOTH judgements of the failed frame have settled, so a caller that
+// discards the frame leaves no request of that observation running.
+export class ModelUnavailableBreak extends Error {
+  readonly reason = 'model_unavailable_503';
+  readonly captureTs: number;
+  constructor(captureTs: number) {
+    super('model_unavailable_503');
+    this.captureTs = captureTs;
+  }
+}
+
+// A judgement that completed but whose result was already too old to be evidence. Raised
+// only when the runner says the one recovery is still available inside a started encounter;
+// otherwise the result is dropped silently, exactly as without recovery. Never a fault.
+export class StaleResultBreak extends Error {
+  readonly reason = 'model_result_stale';
+  readonly captureTs: number;
+  constructor(captureTs: number) {
+    super('model_result_stale');
+    this.captureTs = captureTs;
+  }
+}
+
+export type RecoveryCause = ModelUnavailableBreak['reason'] | StaleResultBreak['reason'];
+
 export async function judgeFreshFrame(
   jpeg: Buffer,
   captureTs: number,
@@ -21,6 +54,7 @@ export async function judgeFreshFrame(
   cfg: Pick<PipelineConfig, 'timezone' | 'nightWindow' | 'context'>,
   converse: DiagnosticConverse,
   diagnostics?: { audit: DiagnosticAudit; now?: () => number },
+  options?: { settleSiblings?: boolean },
 ) {
   const now = diagnostics?.now ?? Date.now;
   const record = (row: Record<string, unknown>) => {
@@ -37,6 +71,12 @@ export async function judgeFreshFrame(
     'You are an independent visual critique of ONE yard camera frame against household context. You do not choose actions.',
     'Do not guess identity, threat or dwell from clothing, infrared lighting, or a single still frame. Dwell is measured separately.',
     `Zone: ${zone}. Local time: ${localTime}. Mode: ${context.mode}.`,
+    ...(context.testSetting === 'office'
+      ? [
+          'Supervised office test: this camera is temporarily indoors, so the frame shows a room, not the configured zone. The zone above is its configured name, not its current location.',
+          'Being indoors, the absence of a yard scene, or a mismatch with the zone name is never a reason for uncertain. Apply the verdict rules below to the people and animals visible in this frame exactly as you would in the configured zone. Use uncertain only when you cannot tell what is visible or what it is doing.',
+        ]
+      : []),
     `Known pets: ${context.knownPets.join('; ') || 'none'}.`,
     `Expected visitors/deliveries: ${context.expectedVisitors.join('; ') || 'none'}.`,
     `Routines: ${context.routines.join('; ') || 'none'}.`,
@@ -44,9 +84,19 @@ export async function judgeFreshFrame(
     'Verdicts: benign for an expected visitor/delivery/routine/known pet or nothing of note; unknown for an unidentified person not matched to context; suspicious only for directly visible concerning behavior; nuisance only for configured species; uncertain when unsure.',
     `Return ONLY JSON: {"evidence_id":"${evidenceId}","person_present":boolean,"verdict":one of ${VERDICTS.join('|')},"reasons":[short strings]}`,
   ].join('\n');
-  const timed = async (model: 'perception' | 'critique', content: ContentBlock[]) => {
+  const timed = async (
+    model: 'perception' | 'critique',
+    content: ContentBlock[],
+    signal?: AbortSignal,
+  ) => {
     const start = now();
-    let metadata: { http_status?: number; request_id?: string } = {};
+    let metadata: {
+      http_status?: number;
+      request_id?: string;
+      input_tokens?: number;
+      output_tokens?: number;
+      stop_reason?: string;
+    } = {};
     record({
       event: 'model_started',
       stage: 'model_request',
@@ -55,12 +105,17 @@ export async function judgeFreshFrame(
       capture_ts: captureTs,
     });
     try {
-      const text = await converse(content, (response) => {
-        metadata = {
-          http_status: safeHttpStatus(response.status),
-          request_id: safeRequestId(response.requestId),
-        };
-      });
+      const text = await converse(
+        content,
+        (response) => {
+          metadata = {
+            http_status: safeHttpStatus(response.status),
+            request_id: safeRequestId(response.requestId),
+            ...safeUsage(response.usage),
+          };
+        },
+        signal,
+      );
       const end = now();
       record({
         event: 'model_completed',
@@ -91,10 +146,41 @@ export async function judgeFreshFrame(
       throw error;
     }
   };
-  const [pResult, cResult] = await Promise.all([
-    timed('perception', [imageBlock(jpeg), { text: perceptionPrompt(evidenceId) }]),
-    timed('critique', [imageBlock(jpeg), { text: critique }]),
-  ]);
+  const start = (signal?: AbortSignal) => [
+    timed('perception', [imageBlock(jpeg), { text: perceptionPrompt(evidenceId) }], signal),
+    timed('critique', [imageBlock(jpeg), { text: critique }], signal),
+  ];
+  let pResult: Awaited<ReturnType<typeof timed>>, cResult: Awaited<ReturnType<typeof timed>>;
+  if (!options?.settleSiblings) [pResult, cResult] = await Promise.all(start());
+  else {
+    // Promise.all rejects before the sibling settles. Here the first failure aborts the
+    // sibling and both outcomes are awaited before anything is reported.
+    const local = new AbortController();
+    const siblingAbort = new DOMException('sibling_failed', 'AbortError');
+    let failed = false,
+      first: unknown;
+    const settled = await Promise.allSettled(
+      start(local.signal).map((request) =>
+        request.catch((error: unknown) => {
+          if (!failed) {
+            failed = true;
+            first = error;
+            local.abort(siblingAbort);
+          }
+          throw error;
+        }),
+      ),
+    );
+    if (failed) {
+      const benign = settled.every(
+        (s) =>
+          s.status === 'fulfilled' || s.reason === siblingAbort || isModelUnavailable(s.reason),
+      );
+      if (isModelUnavailable(first) && benign) throw new ModelUnavailableBreak(captureTs);
+      throw first;
+    }
+    [pResult, cResult] = settled.map((s) => (s as PromiseFulfilledResult<typeof pResult>).value);
+  }
   const parse = (model: 'perception' | 'critique', result: typeof pResult) => {
     const start = now();
     try {

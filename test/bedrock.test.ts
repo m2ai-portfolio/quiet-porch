@@ -99,3 +99,47 @@ describe('request ids for the friction log', () => {
     expect(r).not.toHaveProperty('requestId');
   });
 });
+
+describe('per-call usage for the bounded-run journal', () => {
+  const body = (extra: Record<string, unknown>) =>
+    (async () =>
+      new Response(JSON.stringify({ stopReason: 'end_turn', ...extra }), {
+        status: 200,
+        headers: { 'x-amzn-requestid': 'rid-1' },
+      })) as unknown as typeof fetch;
+  const cfg = { region: 'us-east-1', modelId: 'm', apiKey: 'k' };
+
+  it('reports headers first, then usage once the body is read', async () => {
+    const seen: unknown[] = [];
+    await converse(cfg, [{ text: 'x' }], {
+      onResponse: (m) => seen.push(m),
+      fetchImpl: body({
+        output: { message: { content: [{ text: 'hi' }] } },
+        usage: { inputTokens: 1520, outputTokens: 61 },
+      }),
+    });
+    expect(seen).toEqual([
+      { status: 200, requestId: 'rid-1' },
+      {
+        status: 200,
+        requestId: 'rid-1',
+        usage: { inputTokens: 1520, outputTokens: 61, stopReason: 'end_turn' },
+      },
+    ]);
+  });
+
+  it('still reports usage when the answer has no text, and leaves absent counts absent', async () => {
+    const seen: { usage?: unknown }[] = [];
+    await expect(
+      converse(cfg, [{ text: 'x' }], {
+        onResponse: (m) => seen.push(m),
+        fetchImpl: body({ output: { message: { content: [] } }, stopReason: 'max_tokens' }),
+      }),
+    ).rejects.toThrow(/no text/);
+    expect(seen.at(-1)?.usage).toEqual({
+      inputTokens: undefined,
+      outputTokens: undefined,
+      stopReason: 'max_tokens',
+    });
+  });
+});

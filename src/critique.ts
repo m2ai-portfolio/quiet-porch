@@ -11,6 +11,8 @@ export interface HouseholdContext {
   expectedVisitors: string[];
   routines: string[];
   nuisanceSpecies: string[];
+  // Set in memory only by an approved one-shot office test, never by household config.
+  testSetting?: 'office';
 }
 
 export interface Critique {

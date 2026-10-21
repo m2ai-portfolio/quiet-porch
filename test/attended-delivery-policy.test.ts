@@ -9,8 +9,12 @@ import {
   deliverySpeaker,
   fingerprint,
   validateDeliveryPolicy,
+  deliveryAuthorityActive,
+  deliveryWindowOpen,
+  deliveryTestConfig,
   type DeliveryPolicy,
 } from '../src/attended-delivery-policy.ts';
+import type { PipelineConfig } from '../src/pipeline.ts';
 const dirs: string[] = [];
 const directory = () => {
   const p = mkdtempSync(join(tmpdir(), 'qp-delivery-'));
@@ -81,4 +85,60 @@ it('refuses the ongoing monitor and never releases a replacement lock', () => {
   writeFileSync(join(state, 'ATTENDED-TEST.lock'), 'replacement');
   claim.release();
   expect(readFileSync(join(state, 'ATTENDED-TEST.lock'), 'utf8')).toBe('replacement');
+});
+
+it('rejects malformed, premature, expired or overlong daylight authority', () => {
+  const now = 1000000;
+  const policy = { ...approved(), daylightTest: { startsAt: now, expiresAt: now + 360000 } };
+  expect(() => validateDeliveryPolicy(policy, 'fixture-chat', now)).not.toThrow();
+  for (const daylightTest of [
+    null,
+    {},
+    { startsAt: NaN, expiresAt: now + 1 },
+    { startsAt: now, expiresAt: Infinity },
+    { startsAt: now + 1, expiresAt: now + 2 },
+    { startsAt: now, expiresAt: now - 1 },
+    { startsAt: now - 1, expiresAt: now },
+    { startsAt: now, expiresAt: now + 360001 },
+    { startsAt: now - 360000, expiresAt: now + 1 },
+  ])
+    expect(() =>
+      validateDeliveryPolicy({ ...policy, daylightTest } as DeliveryPolicy, 'fixture-chat', now),
+    ).toThrow();
+  expect(() =>
+    validateDeliveryPolicy({ ...policy, expiresAt: now + 60000 }, 'fixture-chat', now),
+  ).toThrow();
+});
+
+it('requires explicit daylight authority, preserves config, and cannot continue into night after expiry', () => {
+  const noon = Date.UTC(2026, 9, 21, 12);
+  const cfg: PipelineConfig = {
+    dryRun: true,
+    zones: {},
+    timezone: 'UTC',
+    nightWindow: { start: '20:00', end: '06:30' },
+    followUpProbe: false,
+    wildlifeMaxEvidenceAgeMs: 35000,
+    context: {
+      mode: 'home',
+      knownPets: ['fixture pet'],
+      expectedVisitors: ['fixture delivery'],
+      routines: ['fixture routine'],
+      nuisanceSpecies: ['armadillo'],
+    },
+  };
+  const night = Date.UTC(2026, 9, 21, 20);
+  const ordinary = { ...approved(), expiresAt: night + 60000 };
+  expect(deliveryWindowOpen(ordinary, cfg, noon)).toBe(false);
+  expect(deliveryWindowOpen(ordinary, cfg, night)).toBe(true);
+  expect(deliveryTestConfig(ordinary, cfg, noon)).toBe(cfg);
+  const daylight = { ...ordinary, daylightTest: { startsAt: night - 60000, expiresAt: night } };
+  const effective = deliveryTestConfig(daylight, cfg, night - 1000);
+  expect(deliveryWindowOpen(daylight, cfg, night - 1000)).toBe(true);
+  expect(effective).toEqual({ ...cfg, context: { ...cfg.context, mode: 'away' } });
+  expect(cfg.context.mode).toBe('home');
+  expect(deliveryAuthorityActive(daylight, night - 60001)).toBe(false);
+  expect(deliveryAuthorityActive(daylight, night)).toBe(false);
+  expect(deliveryWindowOpen(daylight, cfg, night)).toBe(false);
+  expect(deliveryTestConfig(daylight, cfg, night)).toBe(cfg);
 });

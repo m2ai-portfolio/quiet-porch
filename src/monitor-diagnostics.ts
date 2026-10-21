@@ -5,7 +5,13 @@ import type { ContentBlock } from './bedrock.ts';
 export type DiagnosticAudit = (row: Record<string, unknown>) => void;
 export type DiagnosticConverse = (
   content: ContentBlock[],
-  onResponse?: (metadata: { status?: number; requestId?: string }) => void,
+  onResponse?: (metadata: {
+    status?: number;
+    requestId?: string;
+    usage?: { inputTokens?: unknown; outputTokens?: unknown; stopReason?: unknown };
+  }) => void,
+  // Aborts this request when its sibling judgement of the same frame has failed.
+  observationSignal?: AbortSignal,
 ) => Promise<string>;
 export type MonitorStage =
   'preflight' | 'guard' | 'read_wakes' | 'wake' | 'observe' | 'feed' | 'write_status' | 'wait';
@@ -31,6 +37,33 @@ export function safeHttpStatus(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) && value >= 100 && value <= 599
     ? value
     : undefined;
+}
+
+const STOP_REASONS = new Set([
+  'end_turn',
+  'max_tokens',
+  'stop_sequence',
+  'tool_use',
+  'guardrail_intervened',
+  'content_filtered',
+]);
+
+function safeTokenCount(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 1_000_000
+    ? value
+    : undefined;
+}
+
+// Per-call token usage for latency diagnosis. Only whole counts and fixed provider labels.
+export function safeUsage(usage: unknown) {
+  const input = safeTokenCount(field(usage, 'inputTokens'));
+  const output = safeTokenCount(field(usage, 'outputTokens'));
+  const stop = field(usage, 'stopReason');
+  return {
+    ...(input === undefined ? {} : { input_tokens: input }),
+    ...(output === undefined ? {} : { output_tokens: output }),
+    ...(typeof stop === 'string' && STOP_REASONS.has(stop) ? { stop_reason: stop } : {}),
+  };
 }
 
 export function safeError(error: unknown) {

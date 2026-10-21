@@ -56,7 +56,12 @@ export async function converse(
   opts: {
     maxTokens?: number;
     fetchImpl?: typeof fetch;
-    onResponse?: (metadata: { status: number; requestId?: string }) => void;
+    // Called with headers first, then again with usage once a JSON body has been read.
+    onResponse?: (metadata: {
+      status: number;
+      requestId?: string;
+      usage?: { inputTokens?: unknown; outputTokens?: unknown; stopReason?: unknown };
+    }) => void;
   } = {},
 ): Promise<ConverseResult> {
   const url = `https://bedrock-runtime.${cfg.region}.amazonaws.com/model/${encodeURIComponent(cfg.modelId)}/converse`;
@@ -86,6 +91,16 @@ export async function converse(
     stopReason?: string;
     usage?: { inputTokens?: number; outputTokens?: number };
   };
+  // Before the text check, so an empty answer (e.g. max_tokens) still reports its usage.
+  opts.onResponse?.({
+    status: res.status,
+    requestId,
+    usage: {
+      inputTokens: body.usage?.inputTokens,
+      outputTokens: body.usage?.outputTokens,
+      stopReason: body.stopReason,
+    },
+  });
   const text = (body.output?.message?.content ?? []).map((c) => c.text ?? '').join('');
   if (!text) throw new Error('bedrock: response has no text content');
   return {

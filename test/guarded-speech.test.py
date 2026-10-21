@@ -102,8 +102,16 @@ class GuardedSpeechTests(unittest.TestCase):
         self.address = '11:22:33:44:55:66'
         self.refused('refused_speaker', ['play', *self.args[1:]])
 
+    def test_office_level_plays_without_adjustment(self):
+        # replay-3 (2026-10-21): readiness passed at the approved 36% office level, then this
+        # helper refused because it accepted only 100%.
+        self.volume = 'Volume: 0.36'
+        self.assertEqual(helper.run(self.args), 'accepted qp-audio-fixture')
+        self.assertNotIn('set-volume', str(self.external.call_args_list))
+
     def test_volume_drift_or_mute_refuses_without_adjustment(self):
-        for volume in ['Volume: 0.36', 'Volume: 1.01', 'Volume: 1.00 [MUTED]']:
+        for volume in ['Volume: 0.35', 'Volume: 0.37', 'Volume: 0.51', 'Volume: 1.01',
+                       'Volume: 1.00 [MUTED]', 'Volume: 0.36 [MUTED]']:
             self.volume = volume
             self.refused('refused_volume')
         self.launch.assert_not_called()

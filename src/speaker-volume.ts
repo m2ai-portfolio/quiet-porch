@@ -7,8 +7,16 @@ export function speakerVolumeAllowed(volume: number, speakerFingerprint: string)
 }
 
 // The yard monitor must not silently pass readiness after the owner's level drifts.
-// This validates the readback only; it never changes a device's volume.
-export function speakerVolumeReady(volume: number, speakerFingerprint: string): boolean {
+// This validates the readback only; it never changes a device's volume. A one-shot office
+// test may name its own exact level (Matt accepted 36% indoors on 2026-10-21); any drift
+// from that level still refuses, and the ceiling is unchanged.
+export function speakerVolumeReady(
+  volume: number,
+  speakerFingerprint: string,
+  requiredVolume?: number,
+): boolean {
+  if (requiredVolume !== undefined)
+    return speakerVolumeAllowed(volume, speakerFingerprint) && volume === requiredVolume;
   return (
     speakerVolumeAllowed(volume, speakerFingerprint) &&
     (speakerFingerprint !== fullVolumeSpeakerFingerprint || volume === 1)

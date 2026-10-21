@@ -26,3 +26,11 @@ it('rejects muted, negative and nonfinite readings for the approved speaker', ()
   for (const volume of [0, -1, NaN, Infinity, -Infinity])
     expect(speakerVolumeAllowed(volume, '12b20969fc2c')).toBe(false);
 });
+
+it('an explicit required level replaces the 100% rule but still refuses drift and the ceiling', () => {
+  expect(speakerVolumeReady(0.36, '12b20969fc2c', 0.36)).toBe(true);
+  for (const level of [1, 0.35, 0.37, 0.51, NaN])
+    expect(speakerVolumeReady(level, '12b20969fc2c', 0.36)).toBe(false);
+  expect(speakerVolumeReady(0.7, 'other', 0.7)).toBe(false); // other speakers keep 60%
+  expect(speakerVolumeReady(1, '12b20969fc2c')).toBe(true); // default unchanged
+});
