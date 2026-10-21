@@ -54,7 +54,7 @@ it('reads real-source signed-ingestion records through a full mocked encounter; 
       {
         evidenceId: eventId,
         zone: scope.zone,
-        source: 'clip',
+        source: 'ring:cam',
         captureTs: now,
         imageSha256: 'hash',
       },

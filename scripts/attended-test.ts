@@ -9,6 +9,9 @@ import { promisify } from 'node:util';
 import { createAttendedTest, type TestScope } from '../src/attended-test.ts';
 import { readAttendedEvidence } from '../src/attended-source.ts';
 import { parsePipelineConfig } from '../src/pipeline.ts';
+import { createAttendedObserver } from '../src/attended-observer.ts';
+import { downloadImageAt } from '../src/ring.ts';
+import { bedrockConfigFromEnv, converse } from '../src/bedrock.ts';
 
 const args = process.argv.slice(2);
 if (
@@ -23,6 +26,7 @@ if (
   );
 const policy = JSON.parse(readFileSync(resolve(args[2]), 'utf8')) as {
   approvalReference: string;
+  evidenceMode: 'recorded-followups';
   scope: TestScope;
   expiresAt: number;
   configPath: string;
@@ -34,6 +38,7 @@ const policy = JSON.parse(readFileSync(resolve(args[2]), 'utf8')) as {
 const now = Date.now();
 if (
   !policy.approvalReference ||
+  policy.evidenceMode !== 'recorded-followups' ||
   !Number.isFinite(policy.expiresAt) ||
   policy.expiresAt <= now ||
   policy.expiresAt - now > 60000 ||
@@ -107,6 +112,7 @@ async function ready() {
     (await ssh(`test -f "$HOME/quiet-porch/clips/${clip}.wav" && echo present`)) === 'present'
   );
 }
+const modelConfig = { ...bedrockConfigFromEnv(), timeoutMs: 2000 };
 const lock = resolve(state, 'ATTENDED-TEST.lock');
 const journal = resolve(state, `attended-${Date.now()}.jsonl`);
 // Consume the approval reference once, even if preflight fails; no automatic retry.
@@ -159,6 +165,54 @@ const test = createAttendedTest({
     },
   },
 });
+const observer = createAttendedObserver({
+  scope: policy.scope,
+  config,
+  allowed: () =>
+    test.status().state === 'armed' &&
+    authorized() &&
+    !existsSync(resolve(state, 'KILL')) &&
+    !existsSync(resolve(state, 'ATTENDED-DISARM')),
+  download: async (account, device, ts, opts) => {
+    const tokens = JSON.parse(readFileSync(resolve(state, 'tokens.json'), 'utf8')).tokens as {
+      account_id: string;
+      claimed: boolean;
+      integration_status: string;
+      expires_at: number;
+      access_token: string;
+    }[];
+    const t = tokens.find(
+      (t) => t.account_id === account && t.claimed && t.integration_status === 'completed',
+    );
+    if (!t || t.expires_at <= Date.now()) throw new Error('existing_camera_token_unavailable');
+    return downloadImageAt(t.access_token, device, ts, {
+      ...opts,
+      signal: AbortSignal.any([
+        test.signal,
+        AbortSignal.timeout(Math.max(1, Math.min(2000, policy.expiresAt - Date.now()))),
+      ]),
+    });
+  },
+  converse: async (content) =>
+    (
+      await converse(modelConfig, content, {
+        fetchImpl: (input, init) =>
+          fetch(input, {
+            ...init,
+            signal: AbortSignal.any([
+              test.signal,
+              AbortSignal.timeout(Math.max(1, Math.min(2000, policy.expiresAt - Date.now()))),
+            ]),
+          }),
+      })
+    ).text,
+  audit: (row) =>
+    appendFileSync(
+      journal,
+      JSON.stringify({ utc: new Date().toISOString(), session: test.status().id, ...row }) + '\n',
+      { mode: 0o600 },
+    ),
+});
 for (const sig of ['SIGINT', 'SIGTERM'] as const)
   process.once(sig, () => {
     void test.disarm(sig);
@@ -174,9 +228,16 @@ try {
     const batch = readAttendedEvidence(db, cursor, policy.scope);
     cursor = batch.after;
     for (const frame of batch.frames) await test.feed(frame);
+    if (test.status().state === 'armed' && test.status().encounterStarted) {
+      const observation = await observer.poll();
+      if (observation) await test.feed(observation);
+    }
     await test.tick();
     await new Promise((r) => setTimeout(r, 100));
   }
+} catch {
+  process.exitCode = 1;
+  await test.disarm('observer_or_runner_failure');
 } finally {
   await test.disarm('runner_exit');
   console.log(JSON.stringify({ session: test.status(), journal }));

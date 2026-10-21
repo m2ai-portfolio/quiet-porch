@@ -32,7 +32,7 @@ export function readAttendedEvidence(db: DatabaseSync, after: number, scope: Tes
     if (
       !ev ||
       r.source !== 'ring' ||
-      !['clip', 'live'].includes(r.evidence_source ?? '') ||
+      ![`ring:${scope.deviceId}`, 'live'].includes(r.evidence_source ?? '') ||
       ev.accountId !== scope.accountId ||
       ev.deviceId !== scope.deviceId ||
       r.zone !== scope.zone ||

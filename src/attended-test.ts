@@ -116,7 +116,16 @@ export function createAttendedTest(deps: {
     }
   }
   return {
-    status: () => ({ id, state, alerted, spoken, cleanupSucceeded, endReason }),
+    signal: abort.signal,
+    status: () => ({
+      id,
+      state,
+      alerted,
+      spoken,
+      cleanupSucceeded,
+      endReason,
+      encounterStarted: entered,
+    }),
     async arm() {
       if (state !== 'disarmed') throw new Error('one_shot_session');
       // No async readiness operation may re-arm a session disarmed while it was pending.

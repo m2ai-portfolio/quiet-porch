@@ -143,7 +143,7 @@ export async function downloadImageAt(
   accessToken: string,
   deviceId: string,
   timestampMs: number,
-  opts: { keepImage?: boolean } = {},
+  opts: { keepImage?: boolean; signal?: AbortSignal } = {},
 ): Promise<ImageAttempt> {
   const r1 = await fetch(`${RING_API}/v1/devices/${deviceId}/media/image/download`, {
     method: 'POST',
@@ -154,7 +154,10 @@ export async function downloadImageAt(
       timestamp: timestampMs,
       image_options: { format: 'jpeg' },
     }),
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: AbortSignal.any([
+      AbortSignal.timeout(TIMEOUT_MS),
+      ...(opts.signal ? [opts.signal] : []),
+    ]),
   });
   const location = r1.headers.get('location');
   const rid = requestIdOf(r1.headers);
@@ -163,7 +166,12 @@ export async function downloadImageAt(
     const text = await r1.text();
     return { status: r1.status, step: 1, error_code: errorCode(text), ...ridField };
   }
-  const r2 = await fetch(location, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+  const r2 = await fetch(location, {
+    signal: AbortSignal.any([
+      AbortSignal.timeout(TIMEOUT_MS),
+      ...(opts.signal ? [opts.signal] : []),
+    ]),
+  });
   const buf = Buffer.from(await r2.arrayBuffer());
   const mediaTs = Number(r2.headers.get('x-media-timestamp'));
   const mediaRid = requestIdOf(r2.headers);

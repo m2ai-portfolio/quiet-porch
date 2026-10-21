@@ -109,3 +109,56 @@ Read-only speaker check at 00:34:48 UTC confirmed Anker SoundCore connected and 
 37%, battery 90%, qp-status idle. This supersedes the earlier Bluetooth blocker, not audible
 playback validation. Existing approved Quiet Porch phone destination has not been verified;
 shared environment variable names alone do not establish it.
+
+## Recorded-frame follow-ups (latest candidate)
+
+The private policy now also requires `"evidenceMode": "recorded-followups"`. After a new
+eligible ledger event starts the encounter, the sidecar polls Ring at most every two seconds,
+requesting the recorded frame at now minus two seconds. It makes at most 30 image requests
+and up to 60 existing Bedrock perception/critique calls; both are bounded and cancellable on
+disarm/expiry. It uses the same household context, night window and suppression rules as the
+normal pipeline. No snapshot-to-recording relabel, live decoder clock override, manual person
+button, fabricated input or media export exists. No images are written by the sidecar.
+
+This is a genuine camera-observation code path, not a manual smoke test. Its real availability
+is unproven: the API may not expose a recording quickly enough or long enough, or classification
+may exceed the freshness limit. Those outcomes stop the encounter safely. The media header
+must say recording, include a trusted capture timestamp close to the requested time, and
+advance; both raw and post-classification age must remain under six seconds. A permission
+refusal terminates polling rather than retrying. Prior RTSPS capture-time NO-GO is unchanged.
+
+The ledger reader was corrected to accept the actual `ring:<exact device>` evidence source
+written by the production pipeline (rather than the nonexistent production `clip` label).
+Tests now write the production source format. No production records were changed.
+
+Departure means a valid fresh frame whose validated perception contains no person signal.
+Missing, rejected or expired frames are not absence: the terminal reason is a safety timeout
+or source failure, never observed departure. A phone send acknowledgement is not one received
+notification. The guarantee remains one send attempt, with receipt requiring Matt's phone
+observation; speech likewise requires listening confirmation.
+
+Read-only destination lookup at 00:39:51 UTC: existing configured home route is a private chat
+named Matt, identifier ending 0203, via Hermes1 (`@m2ai_hermes1_bot`). This is a specific route
+for owner confirmation, not authorization inferred from a variable name. No message sent.
+Read-only Cam1 metadata: online, encryption disabled, HEVC capability. No footage requested.
+
+Proposed single-use scope: existing completed/claimed owner fingerprint `48178e372779`,
+Cam1 fingerprint `b9499d1805b6`, existing zone `front_yard`, paired Anker SoundCore suffix
+2E:8F, Matt private phone route suffix 0203. At most 60 seconds from arming, additionally
+capped by the policy's absolute expiry. No primary assignment, token issuance, permission
+expansion, persistent live flag, service restart, light or water command. Existing service
+continues dry-run. The sidecar journal accompanies any real clip; it does not pretend to be
+an armed production ledger row or automatically appear in existing replay/export screens.
+
+Smallest proposed output approval (only after volunteer/framing readiness): one attended
+session of that exact scope, up to 30 fresh-frame reads through the existing integration and
+existing model path, at most one alert to the confirmed private route and one existing cached
+neutral spoken line, independent four-second audio guard, stop on departure/failure/disarm
+and hard expiry, with no sprinkler or lights. Do not construct/consume the private policy or
+run the candidate until that approval arrives. A separate read-only observation session can
+establish source readiness first if desired; it has not been run and is not live success.
+
+Latest validation after recorded-frame follow-ups: 87 passing cases (36 new controller,
+reader, observer and cancellation tests; 15 pipeline; 20 frame/API; 16 mocked server).
+Project and standalone runner typechecks, changed-file lint and formatting pass. No real
+media request, output, runner session or production change was used for this validation.
