@@ -13,8 +13,8 @@ export interface TestEvidence extends TestScope {
   verdict: 'person' | 'empty' | 'uncertain';
 }
 export interface TestOutputs {
-  alert(id: string, signal: AbortSignal): Promise<void>;
-  speak(id: string, signal: AbortSignal): Promise<void>;
+  alert(id: string, signal: AbortSignal, allowed: () => boolean): Promise<void>;
+  speak(id: string, signal: AbortSignal, allowed: () => boolean): Promise<void>;
   stop(): Promise<void>;
 }
 export function createAttendedTest(deps: {
@@ -97,11 +97,18 @@ export function createAttendedTest(deps: {
       await end('guard_failed');
       return;
     }
+    const canDispatch = () => safe() && wall() - last >= 0 && wall() - last < 6000;
+    if (!canDispatch()) {
+      await end('action_evidence_expired');
+      return;
+    }
     record(`${kind}_intent`); // durable caller journal before dispatch; no retries on ambiguity
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        deps.outputs[kind](id, abort.signal),
+        canDispatch()
+          ? deps.outputs[kind](id, abort.signal, canDispatch)
+          : Promise.reject(new Error('action_evidence_expired')),
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => reject(new Error('output_timeout')), 3000);
         }),

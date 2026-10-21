@@ -142,7 +142,8 @@ const test = createAttendedTest({
   killed: () => existsSync(resolve(state, 'KILL')) || existsSync(resolve(state, 'ATTENDED-DISARM')),
   audit: (row) => appendFileSync(journal, JSON.stringify(row) + '\n', { mode: 0o600 }),
   outputs: {
-    async alert(id, signal) {
+    async alert(id, signal, allowed) {
+      if (!allowed()) throw new Error('action_evidence_expired');
       const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
         signal: AbortSignal.any([signal, AbortSignal.timeout(2500)]),
@@ -155,9 +156,10 @@ const test = createAttendedTest({
       const result = (await response.json()) as { ok?: boolean };
       if (!response.ok || result.ok !== true) throw new Error('alert_not_acknowledged');
     },
-    async speak(id, signal) {
+    async speak(id, signal, allowed) {
       if (
         !(await ready()) ||
+        !allowed() ||
         signal.aborted ||
         !authorized() ||
         existsSync(resolve(state, 'KILL')) ||

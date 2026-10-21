@@ -52,3 +52,39 @@ export function readAttendedEvidence(db: DatabaseSync, after: number, scope: Tes
   }
   return { after: rows.at(-1)?.id ?? after, frames };
 }
+
+// Ring event metadata is a wake-up hint, NEVER person/actuation evidence. Read this table
+// before completed model decisions exist; only fresh pixels can subsequently start dwell.
+export interface MotionWake extends TestScope {
+  id: string;
+  eventTs: number;
+  source: 'ring_event';
+}
+export function readMotionWakeups(db: DatabaseSync, after: number, scope: TestScope, now: number) {
+  const rows = db
+    .prepare(
+      'SELECT id, source, received_at, payload FROM events WHERE id > ? ORDER BY id LIMIT 100',
+    )
+    .all(after) as unknown as {
+    id: number;
+    source: string;
+    received_at: number;
+    payload: string;
+  }[];
+  const wakes: MotionWake[] = [];
+  for (const r of rows) {
+    if (r.source !== 'ring') continue;
+    const event = parseMotionEvent(JSON.parse(r.payload), r.received_at);
+    if (
+      !event ||
+      event.accountId !== scope.accountId ||
+      event.deviceId !== scope.deviceId ||
+      event.eventTs > now ||
+      now - event.eventTs >= 15000 ||
+      now - r.received_at >= 15000
+    )
+      continue;
+    wakes.push({ ...scope, id: event.eventId, eventTs: event.eventTs, source: 'ring_event' });
+  }
+  return { after: rows.at(-1)?.id ?? after, wakes };
+}

@@ -15,7 +15,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { type TestScope, type TestOutputs } from '../src/attended-test.ts';
-import { readAttendedEvidence } from '../src/attended-source.ts';
+import { readMotionWakeups } from '../src/attended-source.ts';
 import { parsePipelineConfig } from '../src/pipeline.ts';
 import { createAttendedObserver } from '../src/attended-observer.ts';
 import { downloadImageAt } from '../src/ring.ts';
@@ -116,7 +116,7 @@ async function ready() {
   );
 }
 
-const modelConfig = { ...bedrockConfigFromEnv(), timeoutMs: 2000 };
+const modelConfig = { ...bedrockConfigFromEnv(), timeoutMs: 4000 };
 const lock = resolve(state, 'YARD-MONITOR.lock');
 const journal = resolve(state, `yard-monitor-${Date.now()}.jsonl`);
 const statusPath = resolve(state, 'yard-monitor-status.json');
@@ -135,7 +135,8 @@ const killed = () =>
 function outputFactory(): TestOutputs {
   let speechMayHaveStarted = false;
   return {
-    async alert(id, signal) {
+    async alert(id, signal, allowed) {
+      if (!allowed()) throw new Error('action_evidence_expired');
       const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
         signal: AbortSignal.any([signal, AbortSignal.timeout(2500)]),
@@ -148,9 +149,10 @@ function outputFactory(): TestOutputs {
       const result = (await response.json()) as { ok?: boolean };
       if (!response.ok || result.ok !== true) throw new Error('alert_not_acknowledged');
     },
-    async speak(id, signal) {
+    async speak(id, signal, allowed) {
       if (
         !(await ready()) ||
+        !allowed() ||
         signal.aborted ||
         !authorized() ||
         existsSync(resolve(state, 'KILL')) ||
@@ -189,6 +191,7 @@ let observer: ReturnType<typeof createAttendedObserver> | undefined;
 let observing: string | undefined;
 function makeObserver() {
   return createAttendedObserver({
+    parallelCritique: true,
     scope: policy.scope,
     config,
     allowed: () =>
@@ -220,7 +223,7 @@ function makeObserver() {
           fetchImpl: (input, init) =>
             fetch(input, {
               ...init,
-              signal: AbortSignal.any([monitor.current()!.signal, AbortSignal.timeout(2000)]),
+              signal: AbortSignal.any([monitor.current()!.signal, AbortSignal.timeout(4000)]),
             }),
         })
       ).text,
@@ -234,7 +237,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const)
   process.once(sig, () => {
     void monitor.stop(sig);
   });
-let cursor = Number(db.prepare('SELECT COALESCE(MAX(id),0) AS id FROM decisions').get()?.id);
+let cursor = Number(db.prepare('SELECT COALESCE(MAX(id),0) AS id FROM events').get()?.id);
 try {
   if (!(await ready()) || killed() || !authorized()) throw new Error('monitor_preflight_failed');
   journalRow({
@@ -246,9 +249,9 @@ try {
   });
   while (monitor.status().running) {
     await monitor.tick();
-    const batch = readAttendedEvidence(db, cursor, policy.scope);
+    const batch = readMotionWakeups(db, cursor, policy.scope, Date.now());
     cursor = batch.after;
-    for (const frame of batch.frames) await monitor.feed(frame);
+    for (const wake of batch.wakes) await monitor.wake(wake);
     const current = monitor.current();
     if (current && current.status().state === 'armed') {
       if (observing !== current.status().id) {

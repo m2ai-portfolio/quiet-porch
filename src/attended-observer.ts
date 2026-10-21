@@ -1,5 +1,6 @@
 // Bounded recorded-image follow-ups. Authenticated Ring capture metadata, never arrival time.
 // The caller starts this only after a newly ingested eligible event from the approved camera.
+import { judgeFreshFrame } from './fresh-judgement.ts';
 import { createHash } from 'node:crypto';
 import { checkEventFrame, type Download } from './frames.ts';
 import { evidenceIdFor, judgeFrame, type PipelineConfig } from './pipeline.ts';
@@ -7,6 +8,7 @@ import { personEvidence, validatePerception } from './perception.ts';
 import type { ContentBlock } from './bedrock.ts';
 import type { TestEvidence, TestScope } from './attended-test.ts';
 export function createAttendedObserver(deps: {
+  parallelCritique?: boolean;
   scope: TestScope;
   config: () => PipelineConfig;
   download: Download;
@@ -62,7 +64,7 @@ export function createAttendedObserver(deps: {
           // No image storage. The normal evidence key includes its bytes' hash.
           createHash('sha256').update(image.image).digest('hex'),
         );
-        const judgement = await judgeFrame(
+        const judgement = await (deps.parallelCritique ? judgeFreshFrame : judgeFrame)(
           image.image,
           ts,
           evidenceId,
@@ -80,12 +82,22 @@ export function createAttendedObserver(deps: {
         let verdict: TestEvidence['verdict'] = 'uncertain';
         if (p.ok) {
           const person = personEvidence(p.value);
-          if (!person.signal && !person.contradiction) verdict = 'empty';
+          if (
+            !person.signal &&
+            !person.contradiction &&
+            judgement.decision.kind === 'log' &&
+            judgement.decision.reason === 'nothing_actionable'
+          )
+            verdict = 'empty';
           if (judgement.decision.kind === 'intruder' && person.detected && !person.contradiction)
             verdict = 'person';
         }
         deps.audit({
           event: 'followup_observation',
+          perception_ms: judgement.perceptionMs,
+          critique_ms: judgement.critiqueMs,
+          age_at_completion_ms: age,
+          parallel_critique: deps.parallelCritique === true,
           evidence_id: evidenceId,
           capture_ts: ts,
           verdict,
