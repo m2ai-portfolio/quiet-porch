@@ -1,4 +1,20 @@
-# Fresh-trigger correction — prepared, not deployed
+# Fresh-trigger correction — preparation and subsequent evidence
+
+## Status update — 2026-10-21
+
+Commit `fe540e6` was deployed at 02:57 UTC after the approved sidecar restart. A real
+03:24 UTC event woke the monitor 44 ms after webhook receipt. Five parallel analyses
+completed 4895–5250 ms after their actual capture timestamps. The first capture preceded
+arming; four accepted person captures spanned 9997 ms. No alert or speech was requested
+before `source_or_runtime_fault` stopped the monitor at 03:25:04.253 UTC. The exception
+was discarded by the runner, so its underlying cause is unknown. The latency correction
+is demonstrated; a full live response is not. The monitor remains disarmed while a separate
+diagnostics candidate is prepared. See `monitor-diagnostics.md` for its scope and validation.
+
+## Original preparation plan — historical
+
+The following records the state before the approved deployment; its deployment-pending
+statements describe that earlier point in time.
 
 Real evidence: Cam1 capture 2026-10-20 21:30:30.256 CDT, received 21:30:31.237,
 frame ready at +3.506s, perception 2.563s, critique 2.326s, completed at +8.404s.

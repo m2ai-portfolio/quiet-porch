@@ -22,6 +22,7 @@ import { downloadImageAt } from '../src/ring.ts';
 import { bedrockConfigFromEnv, converse } from '../src/bedrock.ts';
 import { createYardMonitor } from '../src/yard-monitor.ts';
 import { inWindow } from '../src/decide.ts';
+import { stopForRuntimeFault, type MonitorStage } from '../src/monitor-diagnostics.ts';
 
 const args = process.argv.slice(2);
 if (args.length !== 3 || args[0] !== '--arm-ongoing' || args[1] !== '--scope')
@@ -217,16 +218,17 @@ function makeObserver() {
         signal: AbortSignal.any([monitor.current()!.signal, AbortSignal.timeout(2000)]),
       });
     },
-    converse: async (content) =>
-      (
-        await converse(modelConfig, content, {
-          fetchImpl: (input, init) =>
-            fetch(input, {
-              ...init,
-              signal: AbortSignal.any([monitor.current()!.signal, AbortSignal.timeout(4000)]),
-            }),
-        })
-      ).text,
+    converse: async (content, onResponse) => {
+      const result = await converse(modelConfig, content, {
+        onResponse,
+        fetchImpl: (input, init) =>
+          fetch(input, {
+            ...init,
+            signal: AbortSignal.any([monitor.current()!.signal, AbortSignal.timeout(4000)]),
+          }),
+      });
+      return result.text;
+    },
     audit: journalRow,
   });
 }
@@ -238,6 +240,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const)
     void monitor.stop(sig);
   });
 let cursor = Number(db.prepare('SELECT COALESCE(MAX(id),0) AS id FROM events').get()?.id);
+let stage: MonitorStage = 'preflight';
 try {
   if (!(await ready()) || killed() || !authorized()) throw new Error('monitor_preflight_failed');
   journalRow({
@@ -248,9 +251,12 @@ try {
     no_lights: true,
   });
   while (monitor.status().running) {
+    stage = 'guard';
     await monitor.tick();
+    stage = 'read_wakes';
     const batch = readMotionWakeups(db, cursor, policy.scope, Date.now());
     cursor = batch.after;
+    stage = 'wake';
     for (const wake of batch.wakes) await monitor.wake(wake);
     const current = monitor.current();
     if (current && current.status().state === 'armed') {
@@ -258,9 +264,12 @@ try {
         observer = makeObserver();
         observing = current.status().id;
       }
+      stage = 'observe';
       const frame = await observer!.poll();
+      stage = 'feed';
       if (frame) await monitor.feed(frame);
     }
+    stage = 'write_status';
     writeFileSync(
       statusPath,
       JSON.stringify({
@@ -274,10 +283,11 @@ try {
       }),
       { mode: 0o600 },
     );
+    stage = 'wait';
     await new Promise((r) => setTimeout(r, 250));
   }
-} catch {
-  await monitor.stop('source_or_runtime_fault');
+} catch (error) {
+  await stopForRuntimeFault(monitor, journalRow, stage, error);
   process.exitCode = 1;
 } finally {
   clearInterval(watchdog);

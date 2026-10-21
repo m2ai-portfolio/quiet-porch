@@ -5,14 +5,20 @@ import { createHash } from 'node:crypto';
 import { checkEventFrame, type Download } from './frames.ts';
 import { evidenceIdFor, judgeFrame, type PipelineConfig } from './pipeline.ts';
 import { personEvidence, validatePerception } from './perception.ts';
-import type { ContentBlock } from './bedrock.ts';
 import type { TestEvidence, TestScope } from './attended-test.ts';
+import {
+  diagnostic,
+  safeError,
+  safeHttpStatus,
+  safeRequestId,
+  type DiagnosticConverse,
+} from './monitor-diagnostics.ts';
 export function createAttendedObserver(deps: {
   parallelCritique?: boolean;
   scope: TestScope;
   config: () => PipelineConfig;
   download: Download;
-  converse: (content: ContentBlock[]) => Promise<string>;
+  converse: DiagnosticConverse;
   allowed: () => boolean;
   audit: (r: Record<string, unknown>) => void;
   now?: () => number;
@@ -30,17 +36,52 @@ export function createAttendedObserver(deps: {
       attempts++;
       lastPoll = now();
       const requested = lastPoll - 2000;
+      const poll = attempts;
+      const pollStarted = lastPoll;
+      let stage = 'configuration',
+        captureTs: number | undefined;
+      const record = (row: Record<string, unknown>) =>
+        diagnostic(deps.audit, {
+          poll,
+          poll_started_at: pollStarted,
+          requested_ts: requested,
+          ...row,
+        });
+      record({ event: 'observation_started', stage });
       try {
         const cfg = deps.config();
+        stage = 'authorization';
         if (!deps.allowed() || cfg.zones[deps.scope.deviceId] !== deps.scope.zone) return;
+        stage = 'frame_request';
+        const requestedAt = now();
+        record({ event: 'frame_requested', stage, requested_at: requestedAt });
         const image = await deps.download(deps.scope.accountId, deps.scope.deviceId, requested, {
           keepImage: true,
         });
+        const readyAt = now();
+        captureTs =
+          typeof image.media_timestamp === 'number' && Number.isFinite(image.media_timestamp)
+            ? image.media_timestamp
+            : undefined;
+        record({
+          event: 'frame_completed',
+          stage,
+          requested_at: requestedAt,
+          completed_at: readyAt,
+          duration_ms: readyAt - requestedAt,
+          capture_ts: captureTs,
+          age_at_completion_ms: captureTs === undefined ? undefined : readyAt - captureTs,
+          http_status: safeHttpStatus(image.status),
+          request_id: safeRequestId(image.request_id),
+          media_request_id: safeRequestId(image.media_request_id),
+        });
+        stage = 'frame_authorization';
         if (!deps.allowed()) return;
         if (image.status === 401 || image.status === 403) {
           blocked = true;
           throw new Error('camera_access_denied');
         }
+        stage = 'frame_validation';
         const check = checkEventFrame(image, requested, lastPoll);
         const ts = image.media_timestamp;
         if (
@@ -57,6 +98,7 @@ export function createAttendedObserver(deps: {
           return;
         }
         lastCapture = ts;
+        stage = 'evidence_key';
         const evidenceId = evidenceIdFor(
           deps.scope.zone,
           deps.scope.deviceId,
@@ -64,20 +106,19 @@ export function createAttendedObserver(deps: {
           // No image storage. The normal evidence key includes its bytes' hash.
           createHash('sha256').update(image.image).digest('hex'),
         );
-        const judgement = await (deps.parallelCritique ? judgeFreshFrame : judgeFrame)(
-          image.image,
-          ts,
-          evidenceId,
-          deps.scope.zone,
-          cfg,
-          deps.converse,
-        );
+        stage = 'model_judgement';
+        const args = [image.image, ts, evidenceId, deps.scope.zone, cfg, deps.converse] as const;
+        const judgement = await (deps.parallelCritique
+          ? judgeFreshFrame(...args, { audit: record, now })
+          : judgeFrame(...args));
+        stage = 'result_authorization';
         if (!deps.allowed()) return;
         const age = now() - ts;
         if (age < 0 || age >= 6000) {
           deps.audit({ event: 'followup_rejected', reason: 'model_result_stale' });
           return;
         }
+        stage = 'result_validation';
         const p = validatePerception(judgement.perception, evidenceId);
         let verdict: TestEvidence['verdict'] = 'uncertain';
         if (p.ok) {
@@ -92,6 +133,7 @@ export function createAttendedObserver(deps: {
           if (judgement.decision.kind === 'intruder' && person.detected && !person.contradiction)
             verdict = 'person';
         }
+        stage = 'observation_audit';
         deps.audit({
           event: 'followup_observation',
           perception_ms: judgement.perceptionMs,
@@ -105,6 +147,18 @@ export function createAttendedObserver(deps: {
           reason: judgement.decision.reason,
         });
         return { ...deps.scope, id: evidenceId, captureTs: ts, source: 'ring', verdict };
+      } catch (error) {
+        const end = now();
+        record({
+          event: 'observation_failed',
+          stage,
+          completed_at: end,
+          duration_ms: end - pollStarted,
+          capture_ts: captureTs,
+          age_at_completion_ms: captureTs === undefined ? undefined : end - captureTs,
+          ...safeError(error),
+        });
+        throw error;
       } finally {
         busy = false;
       }
