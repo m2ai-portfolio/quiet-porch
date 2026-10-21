@@ -48,7 +48,8 @@ Operator supplies private JSON outside the repo:
     "deviceId": "<verified Cam1>",
     "zone": "front_yard"
   },
-  "expiresAt": "<replace with numeric epoch milliseconds, at most 60 seconds ahead>",
+  "startsAt": "<agreed future epoch milliseconds, 30 seconds to 5 minutes ahead at preparation launch>",
+  "expiresAt": "<startsAt plus exactly 60000, numeric epoch milliseconds>",
   "configPath": "/home/apexaipc/projects/quiet-porch/config/quiet-porch.json",
   "piHost": "rpi-claw",
   "speakerAddress": "<exact verified existing paired-speaker Bluetooth address>",
@@ -172,3 +173,39 @@ evidence remains a separate timeout/failure. The existing front_yard zone is unc
 No gate location, boundary or gate detection is required by the candidate code. The selected
 cached clip's SHA-256 filename matches exactly “You're on camera at the front yard.”; it
 contains no gate wording. No audio was played to perform this check.
+
+## Scheduled preparation replaces immediate launch
+
+The first 20:18:43–20:19:42 CDT attempt was a coordination failure: the parent did not
+receive/persist ACTIVE before expiry, never cued the volunteer, and the ledger recorded
+zero events, decisions or outputs. It is not evidence of camera failure. Its approval is
+consumed and expired; no second attempt is authorized. Keep the original receipts unchanged.
+
+Before another run, agree a future start time with Matt, with timezone explicitly stated,
+and obtain a fresh one-session approval for that time and the existing exact scope. Launch
+preparation 30 seconds to 5 minutes before that start. The private policy must include numeric
+startsAt and expiresAt = startsAt + 60000. The immediate launcher from the first attempt is
+obsolete and must not be reused. No new policy or start time has been approved or created.
+
+Preparation acquires the one-shot lock/approval reference and stays DISARMED. Its only external
+preflight operations are read-only speaker readiness checks; it does not read footage, run
+vision inference, send notifications or play audio. Initial readiness is bounded to 2.5 seconds,
+and at least 15 seconds must remain to publish WAITING_DISARMED. The notice includes exact
+start/expiry and is written both to stdout and a private journal-adjacent status JSON file.
+Readiness is refreshed about five seconds before the scheduled start.
+
+At the agreed clock time, Matt cues the volunteer to approach into Cam1's yard view, linger
+about 45 seconds, then leave the view. The sidecar arms at that scheduled time, independently
+of any ACTIVE message delivery. Waiting cannot extend the live window. A start missed by
+more than two seconds or a significant clock jump cancels instead of starting late. Old ledger
+rows from preparation are discarded, and existing capture-time/freshness checks remain.
+
+Ctrl-C/SIGTERM, KILL, ATTENDED-DISARM, permission loss or failed readiness cancels waiting
+without arming. All existing active-period stop rules and output limits still apply. The
+absolute expiry remains fixed at agreed start + 60 seconds; every exit disarms and performs
+any necessary speech cleanup. Final status is ENDED. Cancellation consumes the prepared
+one-shot reference as well; there is no automatic retry, rescheduling or re-arm.
+
+New tests cover waiting without outputs, cancellation, authority loss, delayed wake, delayed
+async arm with cleanup, active expiry independent of waiting, readiness failure, clock jumps,
+minimum notice and maximum preparation/active lifetime.

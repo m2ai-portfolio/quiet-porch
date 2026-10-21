@@ -1,6 +1,14 @@
 // Explicit local one-shot runner. Importing this file is not a supported interface.
 // No defaults activate it. Approval policy is supplied only after the owner approves its scope.
-import { appendFileSync, existsSync, readFileSync, openSync, closeSync, unlinkSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+  openSync,
+  closeSync,
+  unlinkSync,
+} from 'node:fs';
 import { resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
@@ -12,6 +20,7 @@ import { parsePipelineConfig } from '../src/pipeline.ts';
 import { createAttendedObserver } from '../src/attended-observer.ts';
 import { downloadImageAt } from '../src/ring.ts';
 import { bedrockConfigFromEnv, converse } from '../src/bedrock.ts';
+import { validateSchedule, waitForAttendedStart } from '../src/attended-schedule.ts';
 
 const args = process.argv.slice(2);
 if (
@@ -28,6 +37,7 @@ const policy = JSON.parse(readFileSync(resolve(args[2]), 'utf8')) as {
   approvalReference: string;
   evidenceMode: 'recorded-followups';
   scope: TestScope;
+  startsAt: number;
   expiresAt: number;
   configPath: string;
   piHost: string;
@@ -41,7 +51,6 @@ if (
   policy.evidenceMode !== 'recorded-followups' ||
   !Number.isFinite(policy.expiresAt) ||
   policy.expiresAt <= now ||
-  policy.expiresAt - now > 60000 ||
   policy.piHost !== 'rpi-claw' ||
   !/^(?:[A-Fa-f0-9]{2}:){5}[A-Fa-f0-9]{2}$/.test(policy.speakerAddress) ||
   !policy.scope?.accountId ||
@@ -51,6 +60,7 @@ if (
   !/^[A-Z_][A-Z0-9_]*$/.test(policy.telegramChatEnv)
 )
   throw new Error('Invalid or expired bounded approval policy');
+validateSchedule(policy.startsAt, policy.expiresAt, now);
 const state = resolve(args[4]);
 const db = new DatabaseSync(resolve(state, 'quiet-porch.db'), { readOnly: true });
 const config = () => parsePipelineConfig(JSON.parse(readFileSync(policy.configPath, 'utf8')));
@@ -67,6 +77,7 @@ const authorized = () => {
   // This policy grants only ephemeral scope, never primary-household designation or a DB write.
   return (
     Date.now() < policy.expiresAt &&
+    !existsSync(resolve(state, 'YARD-MONITOR.lock')) &&
     cfg.dryRun === true &&
     cfg.zones[policy.scope.deviceId] === policy.scope.zone &&
     bound?.account_id === policy.scope.accountId &&
@@ -123,10 +134,11 @@ const used = resolve(
 closeSync(openSync(used, 'wx', 0o600));
 closeSync(openSync(lock, 'wx', 0o600)); // cross-process exclusion; stale lock requires owner inspection
 let speechMayHaveStarted = false;
+let preflightValidUntil = -Infinity;
 const test = createAttendedTest({
   scope: policy.scope,
-  authorize: authorized,
-  ready,
+  authorize: () => Date.now() >= policy.startsAt && authorized(),
+  ready: async () => preflightValidUntil >= Date.now(),
   killed: () => existsSync(resolve(state, 'KILL')) || existsSync(resolve(state, 'ATTENDED-DISARM')),
   audit: (row) => appendFileSync(journal, JSON.stringify(row) + '\n', { mode: 0o600 }),
   outputs: {
@@ -219,8 +231,54 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const)
   });
 let cursor = Number(db.prepare('SELECT COALESCE(MAX(id),0) AS id FROM decisions').get()?.id);
 try {
-  // Preflight failure cannot emit audio or alert. Safety stop is issued only after a possible speech dispatch.
-  await test.arm();
+  // The volunteer's cue is the agreed clock time, not a later cross-thread ACTIVE message.
+  await waitForAttendedStart({
+    startsAt: policy.startsAt,
+    expiresAt: policy.expiresAt,
+    signal: test.signal,
+    permitted: () =>
+      !test.signal.aborted &&
+      authorized() &&
+      !existsSync(resolve(state, 'KILL')) &&
+      !existsSync(resolve(state, 'ATTENDED-DISARM')),
+    preflight: async () => {
+      const ok = await ready();
+      if (ok) preflightValidUntil = Date.now() + 6000;
+      return ok;
+    },
+    waiting: () => {
+      const notice = {
+        phase: 'WAITING_DISARMED',
+        starts_utc: new Date(policy.startsAt).toISOString(),
+        expires_utc: new Date(policy.expiresAt).toISOString(),
+        no_outputs: true,
+        session: test.status().id,
+      };
+      writeFileSync(journal + '.status.json', JSON.stringify(notice), { mode: 0o600 });
+      appendFileSync(
+        journal,
+        JSON.stringify({ utc: new Date().toISOString(), event: 'waiting_disarmed', ...notice }) +
+          '\n',
+        { mode: 0o600 },
+      );
+      console.log(JSON.stringify(notice));
+    },
+    arm: async () => {
+      await test.arm();
+    },
+  });
+  // Discard all pre-start ledger rows; capture-time guards also exclude pre-arm evidence.
+  cursor = Number(db.prepare('SELECT COALESCE(MAX(id),0) AS id FROM decisions').get()?.id);
+  writeFileSync(
+    journal + '.status.json',
+    JSON.stringify({
+      phase: 'ACTIVE',
+      starts_utc: new Date(policy.startsAt).toISOString(),
+      expires_utc: new Date(policy.expiresAt).toISOString(),
+      session: test.status().id,
+    }),
+    { mode: 0o600 },
+  );
   console.log(
     `Bounded session active; emergency Ctrl-C or create ${resolve(state, 'ATTENDED-DISARM')}. Private journal: ${journal}`,
   );
@@ -240,6 +298,11 @@ try {
   await test.disarm('observer_or_runner_failure');
 } finally {
   await test.disarm('runner_exit');
+  writeFileSync(
+    journal + '.status.json',
+    JSON.stringify({ phase: 'ENDED', session: test.status() }),
+    { mode: 0o600 },
+  );
   console.log(JSON.stringify({ session: test.status(), journal }));
   if (test.status().cleanupSucceeded !== true) process.exitCode = 1;
   db.close();
