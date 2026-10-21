@@ -217,6 +217,13 @@ it('an output deadline aborts and cleans up without retry', async () => {
   expect(r.outputs.alert).toHaveBeenCalledTimes(1);
   expect(r.outputs.speak).not.toHaveBeenCalled();
   expect(r.outputs.stop).toHaveBeenCalledTimes(1);
+  expect(r.rows).toContainEqual(
+    expect.objectContaining({
+      event: 'output_failed',
+      output: 'alert',
+      error_class: 'TimeoutError',
+    }),
+  );
 });
 
 it('cannot arm after being disarmed during readiness checks', async () => {

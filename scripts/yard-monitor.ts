@@ -23,7 +23,7 @@ import { bedrockConfigFromEnv, converse } from '../src/bedrock.ts';
 import { createYardMonitor } from '../src/yard-monitor.ts';
 import { inWindow } from '../src/decide.ts';
 import { stopForRuntimeFault, type MonitorStage } from '../src/monitor-diagnostics.ts';
-import { speakerVolumeAllowed } from '../src/speaker-volume.ts';
+import { createSpeakerOutput } from '../src/speaker-output.ts';
 
 const args = process.argv.slice(2);
 if (args.length !== 3 || args[0] !== '--arm-ongoing' || args[1] !== '--scope')
@@ -98,27 +98,6 @@ const ssh = async (command: string, signal?: AbortSignal) =>
     })
   ).stdout.trim();
 const clip = 'speech-6fa6f1f5966142279ab93f3b1fa91dc1dd98d210c47af2ae879f964df24cb6aa';
-async function ready() {
-  const sink = await ssh('wpctl inspect @DEFAULT_AUDIO_SINK@');
-  const volume = await ssh('wpctl get-volume @DEFAULT_AUDIO_SINK@');
-  const match = /^Volume: ([0-9.]+)$/.exec(volume);
-  const helper = await ssh('cat "$(command -v qp-speak)"');
-  return (
-    !/auto_null|Dummy Output|node.virtual = "true"/.test(sink) &&
-    sink
-      .match(/node\.name = "bluez_output\.([^"]+)"/)?.[1]
-      .replaceAll('_', ':')
-      .toUpperCase() === policy.speakerAddress.toUpperCase() &&
-    !!match &&
-    speakerVolumeAllowed(
-      Number(match[1]),
-      createHash('sha256').update(policy.speakerAddress.toUpperCase()).digest('hex').slice(0, 12),
-    ) &&
-    (await ssh('qp-status')) === 'idle' &&
-    helper.includes('-p RuntimeMaxSec=4') &&
-    (await ssh(`test -f "$HOME/quiet-porch/clips/${clip}.wav" && echo present`)) === 'present'
-  );
-}
 
 const modelConfig = { ...bedrockConfigFromEnv(), timeoutMs: 4000 };
 const lock = resolve(state, 'YARD-MONITOR.lock');
@@ -136,9 +115,21 @@ const journalRow = (row: Record<string, unknown>) =>
   });
 const killed = () =>
   existsSync(resolve(state, 'KILL')) || existsSync(resolve(state, 'YARD-MONITOR-DISARM'));
+const speaker = createSpeakerOutput({
+  ssh,
+  speakerFingerprint: createHash('sha256')
+    .update(policy.speakerAddress.toUpperCase())
+    .digest('hex')
+    .slice(0, 12),
+  clip,
+  authorized,
+  killed,
+  audit: journalRow,
+});
+const ready = () => speaker.ready();
 function outputFactory(): TestOutputs {
-  let speechMayHaveStarted = false;
   return {
+    ...speaker.outputs(),
     async alert(id, signal, allowed) {
       if (!allowed()) throw new Error('action_evidence_expired');
       const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
@@ -152,27 +143,6 @@ function outputFactory(): TestOutputs {
       });
       const result = (await response.json()) as { ok?: boolean };
       if (!response.ok || result.ok !== true) throw new Error('alert_not_acknowledged');
-    },
-    async speak(id, signal, allowed) {
-      if (
-        !(await ready()) ||
-        !allowed() ||
-        signal.aborted ||
-        !authorized() ||
-        existsSync(resolve(state, 'KILL')) ||
-        existsSync(resolve(state, 'YARD-MONITOR-DISARM'))
-      )
-        throw new Error('audio_not_ready_or_authorized');
-      speechMayHaveStarted = true; // Mark before dispatch, including an ambiguous SSH result.
-      const response = await ssh(`qp-speak ${id} ${Date.now()} ${clip}`, signal);
-      if (response !== `started qp-audio-${id}`) throw new Error('playback_not_acknowledged');
-    },
-    async stop() {
-      if (speechMayHaveStarted) {
-        const r = await ssh(`qp-stop ${Date.now() + 1}`);
-        if (r !== 'stopped' || (await ssh('qp-status')) !== 'idle')
-          throw new Error('cleanup_not_acknowledged');
-      }
     },
   };
 }

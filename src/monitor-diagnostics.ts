@@ -74,6 +74,9 @@ export function safeError(error: unknown) {
     error_category: category,
     ...(status === undefined ? {} : { http_status: status }),
     ...(requestId === undefined ? {} : { request_id: requestId }),
+    ...(typeof code === 'number' && Number.isInteger(code) && code >= 0 && code <= 255
+      ? { exit_code: code }
+      : {}),
   };
 }
 

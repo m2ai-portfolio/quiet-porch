@@ -1,5 +1,6 @@
 // One-shot attended test. No HA adapter, general live switch, or automatic re-arm exists here.
 import { randomUUID } from 'node:crypto';
+import { diagnostic, safeError } from './monitor-diagnostics.ts';
 
 export interface TestScope {
   accountId: string;
@@ -59,10 +60,10 @@ export function createAttendedTest(deps: {
       try {
         await deps.outputs.stop();
         cleanupSucceeded = true;
-      } catch {
+      } catch (error) {
         try {
           cleanupSucceeded = false;
-          record('cleanup_failed');
+          record('cleanup_failed', safeError(error));
         } catch {
           /* owner must inspect audio */
         }
@@ -103,6 +104,7 @@ export function createAttendedTest(deps: {
       return;
     }
     record(`${kind}_intent`); // durable caller journal before dispatch; no retries on ambiguity
+    const outputStarted = mono();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
@@ -110,7 +112,10 @@ export function createAttendedTest(deps: {
           ? deps.outputs[kind](id, abort.signal, canDispatch)
           : Promise.reject(new Error('action_evidence_expired')),
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('output_timeout')), 3000);
+          timer = setTimeout(
+            () => reject(new DOMException('output_timeout', 'TimeoutError')),
+            3000,
+          );
         }),
       ]);
       if (!safe()) {
@@ -118,6 +123,16 @@ export function createAttendedTest(deps: {
         return;
       }
       record(`${kind}_ack`); // delivery/playback request acknowledged, not human confirmation
+    } catch (error) {
+      diagnostic(deps.audit, {
+        session: id,
+        event: 'output_failed',
+        output: kind,
+        failed_at: wall(),
+        elapsed_ms: mono() - outputStarted,
+        ...safeError(error),
+      });
+      throw error;
     } finally {
       clearTimeout(timer);
     }
