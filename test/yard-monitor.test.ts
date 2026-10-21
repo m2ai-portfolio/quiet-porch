@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createYardMonitor } from '../src/yard-monitor.ts';
 import type { TestEvidence } from '../src/attended-test.ts';
+import { ActionEvidenceExpiredError, ActionGuardError } from '../src/action-guard.ts';
 const scope = { accountId: 'owner', deviceId: 'cam', zone: 'front_yard' };
 const all: ReturnType<typeof createYardMonitor>[] = [];
 function rig(initialCooldown = 0) {
@@ -139,6 +140,42 @@ it('ambiguous output failure latches the whole monitor off, without retries', as
   await r.feed(700);
   expect(r.outputs.alert).toHaveBeenCalledTimes(1);
   expect(r.outputs.speak).not.toHaveBeenCalled();
+});
+
+it('typed pre-playback expiry cleans up, preserves cooldown and admits a later fresh encounter', async () => {
+  const r = rig();
+  r.outputs.speak.mockRejectedValueOnce(new ActionEvidenceExpiredError());
+  for (let s = 0; s <= 20; s += 5) await r.feed(s);
+  expect(r.outputs.speak).toHaveBeenCalledTimes(1);
+  expect(r.outputs.stop).toHaveBeenCalledTimes(1);
+  expect(r.monitor.status()).toMatchObject({ running: true, phase: 'COOLDOWN' });
+  await r.feed(30);
+  expect(r.factory).toHaveBeenCalledTimes(1);
+  await r.feed(700);
+  expect(r.factory).toHaveBeenCalledTimes(2);
+  expect(r.monitor.status()).toMatchObject({ running: true, phase: 'ENCOUNTER' });
+});
+
+it.each([
+  new Error('action_evidence_expired'),
+  new ActionGuardError('authority_revoked'),
+  new ActionGuardError('emergency_disarm'),
+  new DOMException('provider deadline', 'TimeoutError'),
+])('does not make genuine faults or disarm routine: %s', async (error) => {
+  const r = rig();
+  r.outputs.speak.mockRejectedValueOnce(error);
+  for (let s = 0; s <= 20; s += 5) await r.feed(s);
+  expect(r.monitor.status().running).toBe(false);
+  await r.feed(700);
+  expect(r.factory).toHaveBeenCalledTimes(1);
+});
+
+it('expiry with failed cleanup remains fatal', async () => {
+  const r = rig();
+  r.outputs.speak.mockRejectedValueOnce(new ActionEvidenceExpiredError());
+  r.outputs.stop.mockRejectedValueOnce(new Error('cleanup transport'));
+  for (let s = 0; s <= 20; s += 5) await r.feed(s);
+  expect(r.monitor.status().running).toBe(false);
 });
 it('wrong scope or stale trigger cannot open an encounter', async () => {
   const r = rig();

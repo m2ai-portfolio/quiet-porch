@@ -1,6 +1,12 @@
 // One-shot attended test. No HA adapter, general live switch, or automatic re-arm exists here.
 import { randomUUID } from 'node:crypto';
 import { diagnostic, safeError } from './monitor-diagnostics.ts';
+import {
+  ActionEvidenceExpiredError,
+  ActionGuardError,
+  createActionGuard,
+  type ActionGuard,
+} from './action-guard.ts';
 
 export interface TestScope {
   accountId: string;
@@ -14,8 +20,8 @@ export interface TestEvidence extends TestScope {
   verdict: 'person' | 'empty' | 'uncertain';
 }
 export interface TestOutputs {
-  alert(id: string, signal: AbortSignal, allowed: () => boolean): Promise<void>;
-  speak(id: string, signal: AbortSignal, allowed: () => boolean): Promise<void>;
+  alert(id: string, signal: AbortSignal, allowed: () => boolean, guard: ActionGuard): Promise<void>;
+  speak(id: string, signal: AbortSignal, allowed: () => boolean, guard: ActionGuard): Promise<void>;
   stop(): Promise<void>;
 }
 export function createAttendedTest(deps: {
@@ -101,23 +107,16 @@ export function createAttendedTest(deps: {
     }
   }
   async function output(kind: 'alert' | 'speak') {
-    if (!safe()) {
-      await end('guard_failed');
-      return;
-    }
     const canDispatch = () => safe() && wall() - last >= 0 && wall() - last < 6000;
-    if (!canDispatch()) {
-      await end('action_evidence_expired');
-      return;
-    }
+    const guard = createActionGuard({ captureTs: last, wall, mono, unsafeReason });
+    guard.assert();
     record(`${kind}_intent`); // durable caller journal before dispatch; no retries on ambiguity
     const outputStarted = mono();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
+      guard.assert();
       await Promise.race([
-        canDispatch()
-          ? deps.outputs[kind](id, abort.signal, canDispatch)
-          : Promise.reject(new Error('action_evidence_expired')),
+        deps.outputs[kind](id, abort.signal, canDispatch, guard),
         new Promise<never>((_, reject) => {
           timer = setTimeout(
             () => reject(new DOMException('output_timeout', 'TimeoutError')),
@@ -246,8 +245,16 @@ export function createAttendedTest(deps: {
             record('hold_no_additional_outputs');
           }
         })
-        .catch(async () => {
-          await end('failure');
+        .catch(async (error) => {
+          // end() preserves an already-latched watchdog/disarm reason. A genuine
+          // transport failure must not become routine because its message resembles expiry.
+          const reason =
+            error instanceof ActionEvidenceExpiredError
+              ? (unsafeReason() ?? 'action_evidence_expired')
+              : error instanceof ActionGuardError
+                ? error.reason
+                : 'failure';
+          await end(reason);
         });
       return queue;
     },

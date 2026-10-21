@@ -131,8 +131,8 @@ const ready = () => speaker.ready();
 function outputFactory(): TestOutputs {
   return {
     ...speaker.outputs(),
-    async alert(id, signal, allowed) {
-      if (!allowed()) throw new Error('action_evidence_expired');
+    async alert(id, signal, _allowed, guard) {
+      guard.assert();
       const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: 'POST',
         signal: AbortSignal.any([signal, AbortSignal.timeout(2500)]),

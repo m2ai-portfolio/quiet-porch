@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { createSpeakerOutput, speakerReadinessCommand } from '../src/speaker-output.ts';
 import { createAttendedTest } from '../src/attended-test.ts';
+import { createActionGuard } from '../src/action-guard.ts';
 
 const clip = `speech-${'a'.repeat(64)}`;
 const fingerprint = '12b20969fc2c';
@@ -17,6 +18,8 @@ const healthy = {
   idle: true,
   boundedHelper: true,
   clipPresent: true,
+  bootId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+  piMonotonicMs: 50000,
 };
 const privateText = 'SECRET https://private.invalid/frame?token=SECRET';
 const sessions: ReturnType<typeof createAttendedTest>[] = [];
@@ -42,11 +45,11 @@ function rig(delay = 250) {
       if (signal?.aborted) throw new DOMException(privateText, 'AbortError');
       return JSON.stringify(snapshot);
     }
-    if (command.startsWith('qp-speak ')) {
+    if (command.startsWith('qp-speak-guarded dispatch ')) {
       dispatchTimes.push(time);
       time += 200;
       if (dispatchError) throw dispatchError;
-      return acknowledgement ? `started qp-audio-${command.split(' ')[1]}` : privateText;
+      return acknowledgement ? `accepted qp-audio-${command.split(' ')[2]}` : privateText;
     }
     if (command.startsWith('qp-stop ')) return 'stopped';
     if (command === 'qp-status') return 'idle';
@@ -64,6 +67,13 @@ function rig(delay = 250) {
   });
   const outputs = speaker.outputs();
   return {
+    guard: () =>
+      createActionGuard({
+        captureTs: time,
+        wall: () => time,
+        mono: () => time,
+        unsafeReason: () => undefined,
+      }),
     speaker,
     outputs,
     ssh,
@@ -107,6 +117,9 @@ it.each([
   [{ virtual: true }, 'sink'],
   [{ volume: 1.01 }, 'volume'],
   [{ volume: 0 }, 'volume'],
+  [{ volume: 0.36 }, 'volume'],
+  [{ bootId: 'invalid' }, 'clock'],
+  [{ piMonotonicMs: -1 }, 'clock'],
   [{ volume: null }, 'volume'],
   [{ idle: false }, 'status'],
   [{ boundedHelper: false }, 'helper'],
@@ -117,7 +130,7 @@ it.each([
   const r = rig();
   r.snapshot({ ...healthy, ...patch });
   await expect(
-    r.outputs.speak('fixture', new AbortController().signal, () => true),
+    r.outputs.speak('fixture', new AbortController().signal, () => true, r.guard()),
   ).rejects.toThrow();
   expect(r.dispatchTimes).toEqual([]);
   expect(r.rows).toContainEqual(expect.objectContaining({ rejected_check: reason, ready: false }));
@@ -192,7 +205,7 @@ it.each([716, 1360])('still refuses dispatch when preparation takes %i ms', asyn
   const r = await encounter(delay);
   await r.feed(21000);
   expect(r.dispatchTimes).toEqual([]);
-  expect(r.t.status()).toMatchObject({ state: 'ended', endReason: 'failure' });
+  expect(r.t.status()).toMatchObject({ state: 'ended', endReason: 'action_evidence_expired' });
   expect(r.rows).toContainEqual(
     expect.objectContaining({ event: 'speech_output_failed', stage: 'freshness' }),
   );
@@ -210,7 +223,7 @@ it.each(['cancel', 'authority', 'emergency_disarm'] as const)(
     r.onReadiness(
       condition === 'cancel' ? () => abort.abort() : condition === 'authority' ? r.revoke : r.kill,
     );
-    await expect(r.outputs.speak('fixture', abort.signal, () => true)).rejects.toThrow();
+    await expect(r.outputs.speak('fixture', abort.signal, () => true, r.guard())).rejects.toThrow();
     expect(r.dispatchTimes).toEqual([]);
     expect(r.rows).toContainEqual(
       expect.objectContaining({
@@ -247,7 +260,7 @@ it('records malformed readiness and transport errors without leaking their conte
   const r = rig();
   r.ssh.mockResolvedValueOnce(privateText);
   await expect(
-    r.outputs.speak('fixture', new AbortController().signal, () => true),
+    r.outputs.speak('fixture', new AbortController().signal, () => true, r.guard()),
   ).rejects.toThrow();
   expect(r.rows).toContainEqual(
     expect.objectContaining({ event: 'speaker_readiness_failed', error_class: 'SyntaxError' }),
@@ -275,9 +288,13 @@ it('executes the generated read-only batch against offline command fixtures', as
       { mode: 0o755 },
     );
     writeFileSync(join(dir, 'qp-status'), '#!/bin/sh\necho idle\n', { mode: 0o755 });
-    writeFileSync(join(dir, 'qp-speak'), '#!/bin/sh\n# -p RuntimeMaxSec=4\nexit 99\n', {
-      mode: 0o755,
-    });
+    writeFileSync(
+      join(dir, 'qp-speak-guarded'),
+      '#!/bin/sh\n# RuntimeMaxSec=4 QUIET_PORCH_GUARDED_SPEECH_V1\nexit 99\n',
+      {
+        mode: 0o755,
+      },
+    );
     const run = async () =>
       JSON.parse(
         (
@@ -291,6 +308,8 @@ it('executes the generated read-only batch against offline command fixtures', as
       ...healthy,
       volume: 0.6,
       speakerFingerprint: createHash('sha256').update(address).digest('hex').slice(0, 12),
+      bootId: expect.stringMatching(/^[a-f0-9-]{36}$/),
+      piMonotonicMs: expect.any(Number),
     });
     writeFileSync(join(dir, 'qp-status'), '#!/bin/sh\nexit 7\n', { mode: 0o755 });
     expect(await run()).toEqual({ failedCheck: 'status', exitCode: 7 });
