@@ -23,6 +23,7 @@ import { bedrockConfigFromEnv, converse } from '../src/bedrock.ts';
 import { createYardMonitor } from '../src/yard-monitor.ts';
 import { inWindow } from '../src/decide.ts';
 import { stopForRuntimeFault, type MonitorStage } from '../src/monitor-diagnostics.ts';
+import { speakerVolumeAllowed } from '../src/speaker-volume.ts';
 
 const args = process.argv.slice(2);
 if (args.length !== 3 || args[0] !== '--arm-ongoing' || args[1] !== '--scope')
@@ -109,8 +110,10 @@ async function ready() {
       .replaceAll('_', ':')
       .toUpperCase() === policy.speakerAddress.toUpperCase() &&
     !!match &&
-    Number(match[1]) > 0 &&
-    Number(match[1]) <= 0.6 &&
+    speakerVolumeAllowed(
+      Number(match[1]),
+      createHash('sha256').update(policy.speakerAddress.toUpperCase()).digest('hex').slice(0, 12),
+    ) &&
     (await ssh('qp-status')) === 'idle' &&
     helper.includes('-p RuntimeMaxSec=4') &&
     (await ssh(`test -f "$HOME/quiet-porch/clips/${clip}.wav" && echo present`)) === 'present'

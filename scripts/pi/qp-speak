@@ -7,7 +7,7 @@ set -euo pipefail
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/quiet-porch"
 CLIPS="${QP_CLIP_DIR:-$HOME/quiet-porch/clips}"
 VOLUME_CAP="${QP_VOLUME_CAP:-0.60}"
-# 0.60 is a ceiling, not a default: an override may lower it, never raise it.
+# Other speakers retain a 0.60 ceiling; the verified Anker exception is below.
 VOLUME_CAP="$(awk -v c="$VOLUME_CAP" 'BEGIN { v = c + 0; if (v <= 0 || v > 0.60) v = 0.60; printf "%.2f", v }')"
 intent="${1:-}" epoch="${2:-}" clip="${3:-}"
 [[ $intent =~ ^[A-Za-z0-9-]{1,64}$ ]] || { echo "bad_intent"; exit 2; }
@@ -20,10 +20,26 @@ exec 9>"$STATE/audio.lock"
 flock 9
 stop_epoch="$(cat "$STATE/audio-stop-epoch" 2>/dev/null || echo 0)"
 if (( stop_epoch >= epoch )); then echo "refused_stop_epoch"; exit 0; fi
-current="$(wpctl get-volume @DEFAULT_AUDIO_SINK@ | awk '{print $2}')"
+# Only the owner-approved Anker may keep 100%; pin that checked output for this invocation.
+volume_target=@DEFAULT_AUDIO_SINK@
+play_target=()
+sink_info="$(wpctl inspect @DEFAULT_AUDIO_SINK@)"
+sink_name="$(sed -n 's/.*node\.name = "\(bluez_output\.[^"]*\)".*/\1/p' <<< "$sink_info")"
+sink_id="$(awk 'NR == 1 && $1 == "id" { gsub(/,/, "", $2); print $2 }' <<< "$sink_info")"
+address="${sink_name#bluez_output.}"
+address="${address//_/:}"
+address="${address^^}"
+if [[ $address =~ ^([0-9A-F]{2}:){5}[0-9A-F]{2}$ && $sink_id =~ ^[0-9]+$ ]] &&
+   [[ "$(printf '%s' "$address" | sha256sum | cut -c1-12)" == 12b20969fc2c ]]; then
+  # This speaker's explicit 100% approval supersedes the previous environmental cap.
+  VOLUME_CAP=1.00
+  volume_target="$sink_id"
+  play_target=(--target="$sink_name")
+fi
+current="$(wpctl get-volume "$volume_target" | awk '{print $2}')"
 if awk -v c="$current" -v m="$VOLUME_CAP" 'BEGIN { exit !(c > m) }'; then
-  wpctl set-volume @DEFAULT_AUDIO_SINK@ "$VOLUME_CAP"
+  wpctl set-volume "$volume_target" "$VOLUME_CAP"
 fi
 # RuntimeMaxSec ends the clip on the Pi itself even if ssh or ProBook dies mid-clip.
-systemd-run --user --collect --unit="qp-audio-$intent" -p RuntimeMaxSec=4 pw-play "$file" >/dev/null
+systemd-run --user --collect --unit="qp-audio-$intent" -p RuntimeMaxSec=4 pw-play "${play_target[@]}" "$file" >/dev/null
 echo "started qp-audio-$intent"

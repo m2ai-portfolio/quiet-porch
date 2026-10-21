@@ -135,6 +135,59 @@ describe.skipIf(!hasFlock)('qp-speak and the volume ceiling', () => {
     runWith({ QP_VOLUME_CAP: '0.40' }, 'qp-speak', 'v-low', '1791400000000', clip);
     expect(readFileSync(calls, 'utf8')).toContain('set-volume @DEFAULT_AUDIO_SINK@ 0.40');
   });
+  it.each(['qp-play', 'qp-speak'])(
+    '%s leaves the approved Anker at 100% and pins playback to that verified output',
+    (script) => {
+      const bin = join(home, 'bin');
+      // Synthetic device and hash shim keep the private speaker address out of fixtures.
+      shim(
+        bin,
+        'wpctl',
+        `
+if [[ $1 == inspect ]]; then
+  echo 'id 42, type PipeWire:Interface:Node'
+  echo '  node.name = "bluez_output.AA:BB:CC:DD:EE:0F"'
+fi
+[[ $1 == get-volume ]] && echo 'Volume: 1.00'
+true`,
+      );
+      shim(
+        bin,
+        'sha256sum',
+        "cat >/dev/null; echo '12b20969fc2c00000000000000000000000000000000000000000000000000000000  -'",
+      );
+      const c = script === 'qp-play' ? 'bark-5s' : clip;
+      expect(runWith({ QP_VOLUME_CAP: '0.60' }, script, 'approved-1', '1791400000000', c)).toBe(
+        'started qp-audio-approved-1',
+      );
+      const log = readFileSync(calls, 'utf8');
+      expect(log).toContain('wpctl get-volume 42');
+      expect(log).not.toContain('wpctl set-volume');
+      expect(log).toContain('pw-play --target=bluez_output.AA:BB:CC:DD:EE:0F');
+      expect(log).toContain(`RuntimeMaxSec=${script === 'qp-play' ? 8 : 4}`);
+    },
+  );
+  it.each(['qp-play', 'qp-speak'])(
+    '%s retains 60% for an unapproved Bluetooth output even when 100% is requested',
+    (script) => {
+      shim(
+        join(home, 'bin'),
+        'wpctl',
+        `
+if [[ $1 == inspect ]]; then
+  echo 'id 42, type PipeWire:Interface:Node'
+  echo '  node.name = "bluez_output.AA:BB:CC:DD:EE:0F"'
+fi
+[[ $1 == get-volume ]] && echo 'Volume: 1.00'
+true`,
+      );
+      const c = script === 'qp-play' ? 'bark-5s' : clip;
+      expect(runWith({ QP_VOLUME_CAP: '1.00' }, script, 'other-1', '1791400000000', c)).toBe(
+        'started qp-audio-other-1',
+      );
+      expect(readFileSync(calls, 'utf8')).toContain('wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.60');
+    },
+  );
   it('a speak dispatched before a stop is refused and nothing launches', () => {
     expect(run('qp-stop', '1791400000500')).toBe('stopped');
     expect(run('qp-speak', 'sp-2', '1791400000400', clip)).toBe('refused_stop_epoch');
