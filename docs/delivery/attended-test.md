@@ -88,7 +88,7 @@ source reference timestamps remain NO-GO; recorded clips may time out safely bef
 Do not weaken freshness, label arrival time as Ring capture time, synthesize evidence, or call
 mock success live proof. Current home context requires the existing night window (20:00 CDT).
 
-Before a real run: confirm exact speaker and readiness; confirm gate framing and consenting
+Before a real run: confirm exact speaker and readiness; confirm Cam1 yard framing and consenting
 volunteer; approve exact temporary account/camera scope and existing phone destination;
 prove the real source supplies sustained eligible fresh evidence without weakening guards.
 Record actual UTC/CDT start/end, watermarked Ring clip, phone alert recording, private audit,
@@ -162,3 +162,13 @@ Latest validation after recorded-frame follow-ups: 87 passing cases (36 new cont
 reader, observer and cancellation tests; 15 pipeline; 20 frame/API; 16 mocked server).
 Project and standalone runner typechecks, changed-file lint and formatting pass. No real
 media request, output, runner session or production change was used for this validation.
+
+## Scene correction from Matt
+
+Matt confirms there is no gate: Cam1 faces the yard. The staged encounter is a consenting
+person approaching into Cam1's yard view, lingering in view for about 45 seconds, and leaving
+the view. Departure is still established only by a fresh valid empty observation; loss of
+evidence remains a separate timeout/failure. The existing front_yard zone is unchanged.
+No gate location, boundary or gate detection is required by the candidate code. The selected
+cached clip's SHA-256 filename matches exactly “You're on camera at the front yard.”; it
+contains no gate wording. No audio was played to perform this check.
