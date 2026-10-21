@@ -247,6 +247,19 @@ it('cleanup failure is recorded and never restores armed state', async () => {
   await r.t.arm();
   await r.t.disarm();
   expect(r.rows.some((x) => x.event === 'cleanup_failed')).toBe(true);
+  expect(r.t.status().cleanupSucceeded).toBe(false);
   expect(r.t.status().state).toBe('ended');
   await expect(r.t.arm()).rejects.toThrow('one_shot');
+});
+
+it('a fresh receipt cannot hide a gap between capture timestamps', async () => {
+  const r = make();
+  await r.t.arm();
+  r.advance(5);
+  await r.t.feed(r.ev(0)); // valid five-second-old first frame
+  r.advance(10);
+  await r.t.feed(r.ev(10)); // receipt gap 5s, capture gap 10s
+  expect(r.t.status().endReason).toBe('capture_gap');
+  expect(r.outputs.alert).not.toHaveBeenCalled();
+  expect(r.t.status().cleanupSucceeded).toBe(true);
 });

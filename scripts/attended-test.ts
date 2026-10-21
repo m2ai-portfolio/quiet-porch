@@ -27,6 +27,7 @@ const policy = JSON.parse(readFileSync(resolve(args[2]), 'utf8')) as {
   expiresAt: number;
   configPath: string;
   piHost: string;
+  speakerAddress: string;
   telegramTokenEnv: string;
   telegramChatEnv: string;
 };
@@ -37,6 +38,7 @@ if (
   policy.expiresAt <= now ||
   policy.expiresAt - now > 60000 ||
   policy.piHost !== 'rpi-claw' ||
+  !/^(?:[A-Fa-f0-9]{2}:){5}[A-Fa-f0-9]{2}$/.test(policy.speakerAddress) ||
   !policy.scope?.accountId ||
   !policy.scope.deviceId ||
   policy.scope.zone !== 'front_yard' ||
@@ -93,7 +95,10 @@ async function ready() {
   const helper = await ssh('cat "$(command -v qp-speak)"');
   return (
     !/auto_null|Dummy Output|node.virtual = "true"/.test(sink) &&
-    /bluez_output\.08[:_]EB[:_]ED[:_]87[:_]2E[:_]8F/i.test(sink) &&
+    sink
+      .match(/node\.name = "bluez_output\.([^"]+)"/)?.[1]
+      .replaceAll('_', ':')
+      .toUpperCase() === policy.speakerAddress.toUpperCase() &&
     !!match &&
     Number(match[1]) > 0 &&
     Number(match[1]) <= 0.6 &&
@@ -111,7 +116,7 @@ const used = resolve(
 );
 closeSync(openSync(used, 'wx', 0o600));
 closeSync(openSync(lock, 'wx', 0o600)); // cross-process exclusion; stale lock requires owner inspection
-let armed = false;
+let speechMayHaveStarted = false;
 const test = createAttendedTest({
   scope: policy.scope,
   authorize: authorized,
@@ -133,14 +138,23 @@ const test = createAttendedTest({
       if (!response.ok || result.ok !== true) throw new Error('alert_not_acknowledged');
     },
     async speak(id, signal) {
-      if (!(await ready()) || signal.aborted) throw new Error('audio_not_ready');
+      if (
+        !(await ready()) ||
+        signal.aborted ||
+        !authorized() ||
+        existsSync(resolve(state, 'KILL')) ||
+        existsSync(resolve(state, 'ATTENDED-DISARM'))
+      )
+        throw new Error('audio_not_ready_or_authorized');
+      speechMayHaveStarted = true; // Mark before dispatch, including an ambiguous SSH result.
       const response = await ssh(`qp-speak ${id} ${Date.now()} ${clip}`, signal);
       if (response !== `started qp-audio-${id}`) throw new Error('playback_not_acknowledged');
     },
     async stop() {
-      if (armed) {
+      if (speechMayHaveStarted) {
         const r = await ssh(`qp-stop ${Date.now() + 1}`);
-        if (r !== 'stopped') throw new Error('cleanup_not_acknowledged');
+        if (r !== 'stopped' || (await ssh('qp-status')) !== 'idle')
+          throw new Error('cleanup_not_acknowledged');
       }
     },
   },
@@ -151,9 +165,8 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const)
   });
 let cursor = Number(db.prepare('SELECT COALESCE(MAX(id),0) AS id FROM decisions').get()?.id);
 try {
-  // Preflight failure cannot emit audio or alert. Existing qp-stop is safety-only after arming.
+  // Preflight failure cannot emit audio or alert. Safety stop is issued only after a possible speech dispatch.
   await test.arm();
-  armed = true;
   console.log(
     `Bounded session active; emergency Ctrl-C or create ${resolve(state, 'ATTENDED-DISARM')}. Private journal: ${journal}`,
   );
@@ -166,6 +179,8 @@ try {
   }
 } finally {
   await test.disarm('runner_exit');
+  console.log(JSON.stringify({ session: test.status(), journal }));
+  if (test.status().cleanupSucceeded !== true) process.exitCode = 1;
   db.close();
   unlinkSync(lock);
 }

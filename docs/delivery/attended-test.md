@@ -19,7 +19,7 @@ Only existing Ring-source decisions with accepted camera evidence enter the cont
 normal pipeline's intruder decision and household context still apply. Known/expected people,
 uncertainty, stale capture timestamps, wrong accounts/cameras/zones, synthetic sources and
 repeated evidence do not escalate. Uncertainty or departure ends the session immediately.
-Missing fresh evidence for six seconds after encounter start also stops it. This intentionally
+Missing fresh evidence for six seconds after encounter start also stops it. A capture-time gap of six seconds also ends the session even when delivery was prompt. This intentionally
 fails closed when the current recorded-clip source cannot sustain fresh evidence.
 
 Timing from successive accepted capture timestamps: start, one phone-alert request at 10s,
@@ -51,6 +51,7 @@ Operator supplies private JSON outside the repo:
   "expiresAt": "<replace with numeric epoch milliseconds, at most 60 seconds ahead>",
   "configPath": "/home/apexaipc/projects/quiet-porch/config/quiet-porch.json",
   "piHost": "rpi-claw",
+  "speakerAddress": "<exact verified existing paired-speaker Bluetooth address>",
   "telegramTokenEnv": "<existing approved token environment variable name>",
   "telegramChatEnv": "<existing approved owner destination variable name>"
 }
@@ -69,7 +70,7 @@ authorization boundary, separate from implementing or reviewing this code. Do no
 to test startup. No-argument invocation fails before opening state or contacting devices.
 
 Emergency disarm: operator Ctrl-C/SIGTERM, or create `ATTENDED-DISARM` in the state directory
-(existing KILL also works). The runner aborts pending requests and sends qp-stop. A remote
+(existing KILL also works). The runner aborts pending requests and sends qp-stop only if speech may have been dispatched, then requires an idle readback. A failed cleanup is surfaced in final status and a nonzero runner exit. A remote
 request already accepted may have acted; it is never automatically retried. The Pi's existing
 RuntimeMaxSec=4 independently limits a speech clip if the host or SSH fails. Cleanup failure
 requires owner audio inspection; process exit alone is not proof of silence. A stale exclusive
@@ -97,3 +98,14 @@ Rollback before deployment: remove/abandon this isolated branch; production is u
 After an approved run: disarm and verify idle, retain private audit, remove only the expired
 policy after confirming cleanup, and leave normal service dry-run. Do not reset household state
 or change another writer. No sprinkler/light restoration is needed because neither is touched.
+
+## Follow-up validation (2026-10-21)
+
+25 new controller/reader cases and 15 existing pipeline cases pass (40 total). The 16 existing
+server regression cases also pass with local socket access; all Ring responses in those tests
+are mocked and state is temporary. Project and standalone runner typechecks, changed-file
+ESLint and formatting pass. No real runner session, camera fetch, alert or speech was executed.
+Read-only speaker check at 00:34:48 UTC confirmed Anker SoundCore connected and selected at
+37%, battery 90%, qp-status idle. This supersedes the earlier Bluetooth blocker, not audible
+playback validation. Existing approved Quiet Porch phone destination has not been verified;
+shared environment variable names alone do not establish it.

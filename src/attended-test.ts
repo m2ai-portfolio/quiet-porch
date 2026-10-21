@@ -42,12 +42,15 @@ export function createAttendedTest(deps: {
     held = false;
   let watchdog: ReturnType<typeof setInterval> | undefined;
   let ending: Promise<void> | undefined;
+  let cleanupSucceeded: boolean | undefined;
+  let endReason: string | undefined;
   let queue = Promise.resolve();
   const seen = new Set<string>();
   const record = (event: string, data: Record<string, unknown> = {}) =>
     deps.audit({ session: id, utc: new Date(wall()).toISOString(), event, ...data });
   async function end(reason: string) {
     if (ending) return ending;
+    endReason = reason;
     state = 'ended'; // Invalidate synchronously, including during an in-flight output.
     abort.abort();
     clearInterval(watchdog);
@@ -55,8 +58,10 @@ export function createAttendedTest(deps: {
       // An unavailable audit sink must never prevent physical cleanup.
       try {
         await deps.outputs.stop();
+        cleanupSucceeded = true;
       } catch {
         try {
+          cleanupSucceeded = false;
           record('cleanup_failed');
         } catch {
           /* owner must inspect audio */
@@ -111,7 +116,7 @@ export function createAttendedTest(deps: {
     }
   }
   return {
-    status: () => ({ id, state, alerted, spoken }),
+    status: () => ({ id, state, alerted, spoken, cleanupSucceeded, endReason }),
     async arm() {
       if (state !== 'disarmed') throw new Error('one_shot_session');
       // No async readiness operation may re-arm a session disarmed while it was pending.
@@ -168,6 +173,10 @@ export function createAttendedTest(deps: {
             (entered && ev.captureTs <= last)
           ) {
             record('rejected_evidence');
+            return;
+          }
+          if (entered && ev.captureTs - last >= 6000) {
+            await end('capture_gap');
             return;
           }
           seen.add(ev.id);
