@@ -1,6 +1,7 @@
 // Ongoing owner-scoped supervision, distinct from an attended-test approval or its expiry.
 // Each genuinely new camera encounter has its own finite controller and durable cooldown.
 import type { MotionWake } from './attended-source.ts';
+import { routineEncounterEnd } from './encounter-observation.ts';
 import {
   createAttendedTest,
   type TestEvidence,
@@ -42,16 +43,19 @@ export function createYardMonitor(deps: {
   }
   async function collect() {
     if (!encounter || encounter.status().state !== 'ended') return;
-    const result = encounter.status();
+    const finished = encounter;
+    await finished.disarm(); // Join cleanup even if another watchdog initiated it.
+    if (encounter !== finished || !running) return; // Another collector/manual stop won.
+    if (!permitted()) {
+      await stop('authority_or_emergency_disarm');
+      return;
+    }
+    const result = finished.status();
     deps.audit({ event: 'encounter_ended', ...result });
     cooldown = Math.max(cooldown, now() + 600000);
     deps.reserve(cooldown);
     encounter = undefined;
-    if (
-      result.cleanupSucceeded !== true ||
-      result.endReason === 'failure' ||
-      result.endReason === 'output_late_or_disarmed'
-    )
+    if (result.cleanupSucceeded !== true || !routineEncounterEnd(result.endReason))
       await stop('encounter_fault');
   }
   async function openEncounter() {
@@ -61,7 +65,8 @@ export function createYardMonitor(deps: {
     encounter = createAttendedTest({
       scope: deps.scope,
       outputs: deps.outputs(),
-      authorize: () => permitted() && deps.night(),
+      authorize: () => permitted(),
+      windowOpen: deps.night,
       ready: deps.ready,
       killed: deps.killed,
       audit: deps.audit,

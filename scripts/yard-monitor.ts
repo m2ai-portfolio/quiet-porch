@@ -24,6 +24,7 @@ import { createYardMonitor } from '../src/yard-monitor.ts';
 import { inWindow } from '../src/decide.ts';
 import { stopForRuntimeFault, type MonitorStage } from '../src/monitor-diagnostics.ts';
 import { createSpeakerOutput } from '../src/speaker-output.ts';
+import { pollEncounterObservation } from '../src/encounter-observation.ts';
 
 const args = process.argv.slice(2);
 if (args.length !== 3 || args[0] !== '--arm-ongoing' || args[1] !== '--scope')
@@ -163,15 +164,15 @@ const monitor = createYardMonitor({
 });
 let observer: ReturnType<typeof createAttendedObserver> | undefined;
 let observing: string | undefined;
-function makeObserver() {
+function makeObserver(encounter: NonNullable<ReturnType<typeof monitor.current>>) {
   return createAttendedObserver({
     parallelCritique: true,
     scope: policy.scope,
     config,
     allowed: () =>
       monitor.status().running &&
-      !!monitor.current() &&
-      !monitor.current()!.signal.aborted &&
+      monitor.current() === encounter &&
+      !encounter.signal.aborted &&
       authorized() &&
       !killed(),
     download: async (account, device, ts, opts) => {
@@ -188,7 +189,7 @@ function makeObserver() {
       if (!token || token.expires_at <= Date.now()) throw new Error('camera_token_unavailable');
       return downloadImageAt(token.access_token, device, ts, {
         ...opts,
-        signal: AbortSignal.any([monitor.current()!.signal, AbortSignal.timeout(2000)]),
+        signal: AbortSignal.any([encounter.signal, AbortSignal.timeout(2000)]),
       });
     },
     converse: async (content, onResponse) => {
@@ -197,7 +198,7 @@ function makeObserver() {
         fetchImpl: (input, init) =>
           fetch(input, {
             ...init,
-            signal: AbortSignal.any([monitor.current()!.signal, AbortSignal.timeout(4000)]),
+            signal: AbortSignal.any([encounter.signal, AbortSignal.timeout(4000)]),
           }),
       });
       return result.text;
@@ -234,11 +235,13 @@ try {
     const current = monitor.current();
     if (current && current.status().state === 'armed') {
       if (observing !== current.status().id) {
-        observer = makeObserver();
+        observer = makeObserver(current);
         observing = current.status().id;
       }
       stage = 'observe';
-      const frame = await observer!.poll();
+      const frame = await pollEncounterObservation(current, () => observer!.poll(), journalRow);
+      stage = 'guard';
+      await monitor.tick(); // Settle cleanup/cooldown before another observation or wake.
       stage = 'feed';
       if (frame) await monitor.feed(frame);
     }

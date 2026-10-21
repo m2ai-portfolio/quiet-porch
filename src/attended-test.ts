@@ -24,6 +24,7 @@ export function createAttendedTest(deps: {
   authorize: (scope: TestScope) => boolean;
   ready: () => Promise<boolean>;
   killed: () => boolean;
+  windowOpen?: () => boolean;
   audit: (row: Record<string, unknown>) => void;
   wall?: () => number;
   mono?: () => number;
@@ -76,19 +77,25 @@ export function createAttendedTest(deps: {
     })();
     return ending;
   }
+  function unsafeReason(): string | undefined {
+    if (state !== 'armed') return 'not_armed';
+    if (deps.killed()) return 'emergency_disarm';
+    if (!deps.authorize(deps.scope)) return 'authority_revoked';
+    if (deps.windowOpen && !deps.windowOpen()) return 'night_window_ended';
+    if (mono() < started || (entered && mono() < lastSeen)) return 'clock_reversed';
+    if (mono() - started >= 60000) return 'session_expired';
+    if (entered && mono() - lastSeen >= 6000) return 'evidence_lost';
+    return undefined;
+  }
   function safe() {
-    return (
-      state === 'armed' &&
-      !deps.killed() &&
-      deps.authorize(deps.scope) &&
-      mono() >= started &&
-      mono() - started < 60000 &&
-      (!entered || (mono() >= lastSeen && mono() - lastSeen < 6000))
-    );
+    return unsafeReason() === undefined;
   }
   async function tick() {
     try {
-      if (state === 'armed' && !safe()) await end('timeout_stale_kill_or_authority');
+      if (state === 'armed') {
+        const reason = unsafeReason();
+        if (reason) await end(reason);
+      }
     } catch {
       await end('guard_failed');
     }
@@ -155,9 +162,11 @@ export function createAttendedTest(deps: {
         if (
           !deps.authorize(deps.scope) ||
           deps.killed() ||
+          (deps.windowOpen && !deps.windowOpen()) ||
           !(await deps.ready()) ||
           !deps.authorize(deps.scope) ||
           deps.killed() ||
+          (deps.windowOpen && !deps.windowOpen()) ||
           state !== 'disarmed'
         )
           throw new Error('not_ready_or_authorized');
