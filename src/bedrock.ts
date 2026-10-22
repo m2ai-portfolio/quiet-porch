@@ -21,6 +21,16 @@ export interface ConverseResult {
   requestId?: string; // x-amzn-requestid, for the friction log
 }
 
+export class BedrockHttpError extends Error {
+  readonly status: number;
+  readonly requestId?: string;
+  constructor(message: string, status: number, requestId?: string) {
+    super(message);
+    this.status = status;
+    this.requestId = requestId;
+  }
+}
+
 export function bedrockConfigFromEnv(env: NodeJS.ProcessEnv = process.env): BedrockConfig {
   const region = env.AWS_REGION;
   const modelId = env.BEDROCK_MODEL_ID;
@@ -43,7 +53,16 @@ export function imageBlock(jpeg: Buffer): ContentBlock {
 export async function converse(
   cfg: BedrockConfig,
   content: ContentBlock[],
-  opts: { maxTokens?: number; fetchImpl?: typeof fetch } = {},
+  opts: {
+    maxTokens?: number;
+    fetchImpl?: typeof fetch;
+    // Called with headers first, then again with usage once a JSON body has been read.
+    onResponse?: (metadata: {
+      status: number;
+      requestId?: string;
+      usage?: { inputTokens?: unknown; outputTokens?: unknown; stopReason?: unknown };
+    }) => void;
+  } = {},
 ): Promise<ConverseResult> {
   const url = `https://bedrock-runtime.${cfg.region}.amazonaws.com/model/${encodeURIComponent(cfg.modelId)}/converse`;
   const started = Date.now();
@@ -57,15 +76,31 @@ export async function converse(
     signal: AbortSignal.timeout(cfg.timeoutMs ?? 15_000),
   });
   const requestId = res.headers.get('x-amzn-requestid') ?? undefined;
+  // Headers are available even if reading/decoding the response body fails.
+  opts.onResponse?.({ status: res.status, requestId });
   if (!res.ok) {
     const detail = (await res.text()).slice(0, 300);
-    throw new Error(`bedrock: HTTP ${res.status}${requestId ? ` [${requestId}]` : ''} ${detail}`);
+    throw new BedrockHttpError(
+      `bedrock: HTTP ${res.status}${requestId ? ` [${requestId}]` : ''} ${detail}`,
+      res.status,
+      requestId,
+    );
   }
   const body = (await res.json()) as {
     output?: { message?: { content?: { text?: string }[] } };
     stopReason?: string;
     usage?: { inputTokens?: number; outputTokens?: number };
   };
+  // Before the text check, so an empty answer (e.g. max_tokens) still reports its usage.
+  opts.onResponse?.({
+    status: res.status,
+    requestId,
+    usage: {
+      inputTokens: body.usage?.inputTokens,
+      outputTokens: body.usage?.outputTokens,
+      stopReason: body.stopReason,
+    },
+  });
   const text = (body.output?.message?.content ?? []).map((c) => c.text ?? '').join('');
   if (!text) throw new Error('bedrock: response has no text content');
   return {

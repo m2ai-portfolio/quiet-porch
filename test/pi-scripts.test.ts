@@ -135,6 +135,59 @@ describe.skipIf(!hasFlock)('qp-speak and the volume ceiling', () => {
     runWith({ QP_VOLUME_CAP: '0.40' }, 'qp-speak', 'v-low', '1791400000000', clip);
     expect(readFileSync(calls, 'utf8')).toContain('set-volume @DEFAULT_AUDIO_SINK@ 0.40');
   });
+  it.each(['qp-play', 'qp-speak'])(
+    '%s leaves the approved Anker at 100% and pins playback to that verified output',
+    (script) => {
+      const bin = join(home, 'bin');
+      // Synthetic device and hash shim keep the private speaker address out of fixtures.
+      shim(
+        bin,
+        'wpctl',
+        `
+if [[ $1 == inspect ]]; then
+  echo 'id 42, type PipeWire:Interface:Node'
+  echo '  node.name = "bluez_output.AA:BB:CC:DD:EE:0F"'
+fi
+[[ $1 == get-volume ]] && echo 'Volume: 1.00'
+true`,
+      );
+      shim(
+        bin,
+        'sha256sum',
+        "cat >/dev/null; echo '12b20969fc2c00000000000000000000000000000000000000000000000000000000  -'",
+      );
+      const c = script === 'qp-play' ? 'bark-5s' : clip;
+      expect(runWith({ QP_VOLUME_CAP: '0.60' }, script, 'approved-1', '1791400000000', c)).toBe(
+        'started qp-audio-approved-1',
+      );
+      const log = readFileSync(calls, 'utf8');
+      expect(log).toContain('wpctl get-volume 42');
+      expect(log).not.toContain('wpctl set-volume');
+      expect(log).toContain('pw-play --target=bluez_output.AA:BB:CC:DD:EE:0F');
+      expect(log).toContain(`RuntimeMaxSec=${script === 'qp-play' ? 8 : 4}`);
+    },
+  );
+  it.each(['qp-play', 'qp-speak'])(
+    '%s retains 60% for an unapproved Bluetooth output even when 100% is requested',
+    (script) => {
+      shim(
+        join(home, 'bin'),
+        'wpctl',
+        `
+if [[ $1 == inspect ]]; then
+  echo 'id 42, type PipeWire:Interface:Node'
+  echo '  node.name = "bluez_output.AA:BB:CC:DD:EE:0F"'
+fi
+[[ $1 == get-volume ]] && echo 'Volume: 1.00'
+true`,
+      );
+      const c = script === 'qp-play' ? 'bark-5s' : clip;
+      expect(runWith({ QP_VOLUME_CAP: '1.00' }, script, 'other-1', '1791400000000', c)).toBe(
+        'started qp-audio-other-1',
+      );
+      expect(readFileSync(calls, 'utf8')).toContain('wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.60');
+    },
+  );
   it('a speak dispatched before a stop is refused and nothing launches', () => {
     expect(run('qp-stop', '1791400000500')).toBe('stopped');
     expect(run('qp-speak', 'sp-2', '1791400000400', clip)).toBe('refused_stop_epoch');
@@ -188,3 +241,89 @@ describe('qp-speaker-setup', () => {
     expect(() => readFileSync(join(cfg(), 'systemd/user/qp-keepalive.service'))).toThrow();
   });
 });
+
+// The guarded helper reads the Pi's boot id and CLOCK_BOOTTIME, so this suite runs on Linux.
+// replay-3 (2026-10-21): readiness passed at the approved office level 0.36, then this helper
+// refused the speech because it accepted only 1.00.
+describe.skipIf(!existsSync('/proc/sys/kernel/random/boot_id'))(
+  'qp-speak-guarded accepts only the approved Anker levels',
+  () => {
+    const clip = 'speech-' + 'b'.repeat(64);
+    const address = 'AA:BB:CC:DD:EE:0F';
+    function guarded(volume: string): string {
+      const bin = join(home, 'bin');
+      writeFileSync(join(home, 'clips', `${clip}.wav`), 'RIFF');
+      // Synthetic device: swap the approved fingerprint for the fixture address's hash.
+      const helper = join(home, 'qp-speak-guarded');
+      const fixture = execFileSync('python3', [
+        '-c',
+        `import hashlib;print(hashlib.sha256(b"${address}").hexdigest()[:12])`,
+      ])
+        .toString()
+        .trim();
+      const source = readFileSync(join(SCRIPTS, 'qp-speak-guarded'), 'utf8');
+      expect(source).toContain("APPROVED_SPEAKER = '12b20969fc2c'");
+      writeFileSync(
+        helper,
+        source.replace("APPROVED_SPEAKER = '12b20969fc2c'", `APPROVED_SPEAKER = '${fixture}'`),
+      );
+      chmodSync(helper, 0o755);
+      shim(
+        bin,
+        'wpctl',
+        `
+if [[ $1 == inspect ]]; then
+  echo 'id 42, type PipeWire:Interface:Node'
+  echo '  node.name = "bluez_output.${address.replaceAll(':', '_')}"'
+fi
+[[ $1 == get-volume ]] && echo '${volume}'
+true`,
+      );
+      // The transient unit runs the helper's own play step, as systemd would.
+      shim(
+        bin,
+        'systemd-run',
+        'while [[ $1 != */qp-speak-guarded ]]; do shift; done; "$@" >/dev/null &',
+      );
+      shim(bin, 'pw-play', 'true');
+      const [boot, nowMs] = execFileSync('python3', [
+        '-c',
+        'import time,pathlib;print(pathlib.Path("/proc/sys/kernel/random/boot_id").read_text().strip(), time.clock_gettime_ns(time.CLOCK_BOOTTIME)//1000000)',
+      ])
+        .toString()
+        .trim()
+        .split(' ');
+      try {
+        return execFileSync(
+          helper,
+          ['dispatch', 'vol-1', '1791400000000', clip, fixture, boot, String(Number(nowMs) + 4000)],
+          {
+            env: {
+              PATH: `${bin}:/usr/bin:/bin`,
+              HOME: home,
+              XDG_STATE_HOME: join(home, 'state'),
+              QP_CLIP_DIR: join(home, 'clips'),
+            },
+          },
+        )
+          .toString()
+          .trim();
+      } catch (e) {
+        return (e as { stdout: Buffer }).stdout.toString().trim();
+      }
+    }
+    it.each(['Volume: 1.00', 'Volume: 0.36'])('plays at %s', (volume) => {
+      expect(guarded(volume)).toBe('accepted qp-audio-vol-1');
+      expect(readFileSync(calls, 'utf8')).toContain(
+        'pw-play --target=bluez_output.AA_BB_CC_DD_EE_0F',
+      );
+    });
+    it.each(['Volume: 0.50', 'Volume: 0.37', 'Volume: 0.36 [MUTED]', 'Volume: 0.60'])(
+      'refuses %s and launches nothing',
+      (volume) => {
+        expect(guarded(volume)).toBe('refused_volume');
+        expect(readFileSync(calls, 'utf8')).not.toContain('systemd-run');
+      },
+    );
+  },
+);

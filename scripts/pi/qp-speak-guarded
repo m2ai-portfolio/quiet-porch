@@ -1,0 +1,188 @@
+#!/usr/bin/env python3
+"""QUIET_PORCH_GUARDED_SPEECH_V1: owner-scoped speech, no legacy fallback.
+
+dispatch/play <intent> <ProBook-dispatch-ms> <clip> <fingerprint> <Pi-boot-id> <Pi-deadline-ms>
+The deadline uses Pi CLOCK_BOOTTIME (includes suspend), never cross-host wall time.
+"""
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+
+APPROVED_SPEAKER = '12b20969fc2c'
+# Exact readbacks only: 100% approved for this Anker on 2026-10-21, and the 36% office
+# level Matt accepted indoors the same day. Any other level, or a muted sink, refuses.
+APPROVED_VOLUMES = ('Volume: 1.00', 'Volume: 0.36')
+
+
+class Refusal(Exception):
+    pass
+
+
+def now_ms():
+    return time.clock_gettime_ns(time.CLOCK_BOOTTIME) // 1_000_000
+
+
+def boot_id():
+    return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+
+
+def parse(args):
+    if len(args) != 7 or args[0] not in ('dispatch', 'play'):
+        raise Refusal('bad_arguments')
+    mode, intent, epoch, clip, fingerprint, boot, deadline = args
+    patterns = [(intent, r'[A-Za-z0-9-]{1,64}'), (epoch, r'[0-9]{10,16}'),
+                (clip, r'speech-[a-f0-9]{64}'), (boot, r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}'),
+                (deadline, r'[0-9]{1,16}')]
+    if any(not re.fullmatch(pattern, value) for value, pattern in patterns):
+        raise Refusal('bad_arguments')
+    if fingerprint != APPROVED_SPEAKER:
+        raise Refusal('refused_speaker')
+    return mode, intent, int(epoch), clip, fingerprint, boot, int(deadline)
+
+
+def check_deadline(boot, deadline):
+    if boot != boot_id():
+        raise Refusal('refused_boot')
+    remaining = deadline - now_ms()
+    if remaining <= 0:
+        raise Refusal('refused_expired')
+    if remaining > 6000:
+        raise Refusal('refused_deadline')
+
+
+def output(args):
+    return subprocess.check_output(args, text=True, timeout=1).strip()
+
+
+def checked_sink(fingerprint):
+    info = output(['wpctl', 'inspect', '@DEFAULT_AUDIO_SINK@'])
+    match = re.search(r'node\.name = "(bluez_output\.([^"\n]+))"', info)
+    node = re.search(r'^id ([0-9]+),', info)
+    if not match or not node or re.search(r'auto_null|Dummy Output|node.virtual = "true"', info):
+        raise Refusal('refused_speaker')
+    address = match[2].replace('_', ':').upper()
+    if not re.fullmatch(r'(?:[A-F0-9]{2}:){5}[A-F0-9]{2}', address) or \
+            hashlib.sha256(address.encode()).hexdigest()[:12] != fingerprint:
+        raise Refusal('refused_speaker')
+    if output(['wpctl', 'get-volume', node[1]]) not in APPROVED_VOLUMES:
+        raise Refusal('refused_volume')
+    return match[1]
+
+
+def check_stop(state, epoch):
+    path = state / 'audio-stop-epoch'
+    stopped = int(path.read_text().strip()) if path.exists() else 0
+    if stopped >= epoch:
+        raise Refusal('refused_stop_epoch')
+
+
+def receipt(path, status):
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(json.dumps({'status': status, 'pi_monotonic_ms': now_ms()}))
+    temporary.replace(path)
+
+
+def perform(args):
+    mode, intent, epoch, clip, fingerprint, boot, deadline = parse(args)
+    check_deadline(boot, deadline)
+    state = Path(os.environ.get('XDG_STATE_HOME', str(Path.home() / '.local/state'))) / 'quiet-porch'
+    file = Path(os.environ.get('QP_CLIP_DIR', str(Path.home() / 'quiet-porch/clips'))) / (clip + '.wav')
+    if not file.is_file():
+        raise Refusal('no_clip')
+    state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    result = state / ('guarded-' + intent + '.json')
+    player = None
+    with (state / 'audio.lock').open('a') as lock:
+        # All delay, including lock acquisition, consumes the original Pi deadline.
+        while True:
+            check_deadline(boot, deadline)
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                time.sleep(0.01)
+        try:
+            check_deadline(boot, deadline)
+            check_stop(state, epoch)
+            target = checked_sink(fingerprint)
+            check_deadline(boot, deadline)
+            if mode == 'play':
+                if not result.exists() or json.loads(result.read_text()).get('status') != 'pending':
+                    raise Refusal('refused_duplicate')
+                # This check runs inside the transient unit, after systemd queueing.
+                # The target is explicit; a subsequent default-output switch cannot redirect it.
+                check_deadline(boot, deadline)
+                # Popen's exec-error pipe confirms OS process launch before we acknowledge.
+                # This still does not claim audible onset or human hearing.
+                player = subprocess.Popen(['pw-play', '--target=' + target, str(file)],
+                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                receipt(result, 'process_started')
+            else:
+                if result.exists():
+                    raise Refusal('refused_duplicate')
+                receipt(result, 'pending')
+                subprocess.run([
+                    'systemd-run', '--user', '--collect', '--unit=qp-audio-' + intent,
+                    '-p', 'RuntimeMaxSec=4', '-p', 'Type=exec',
+                    str(Path(__file__).resolve()), 'play', *args[1:],
+                ], check=True, timeout=1, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Refusal as error:
+            if mode == 'play':
+                receipt(result, str(error))
+            raise
+        except Exception:
+            if player is not None:
+                player.terminate()
+            if mode == 'play':
+                receipt(result, 'playback_error')
+            raise
+    # Release the ordering lock so the unit wrapper or an emergency stop can acquire it.
+    if player is not None:
+        code = player.wait()
+        receipt(result, 'process_completed' if code == 0 else 'playback_error')
+        return 'completed qp-audio-' + intent
+    wait_until = min(deadline, now_ms() + 1500)
+    while now_ms() < wait_until:
+        status = json.loads(result.read_text())['status']
+        if status in ('process_started', 'process_completed'):
+            return 'accepted qp-audio-' + intent
+        if status != 'pending':
+            raise Refusal(status)
+        time.sleep(0.01)
+    status = json.loads(result.read_text())['status']
+    if status in ('process_started', 'process_completed'):
+        return 'accepted qp-audio-' + intent
+    if status != 'pending':
+        raise Refusal(status)
+    raise Refusal('refused_expired' if now_ms() >= deadline else 'launch_not_acknowledged')
+
+
+def run(args):
+    # Catch every unit-side refusal, including expiry before/waiting for the lock.
+    mode, intent, *_ = parse(args)
+    state = Path(os.environ.get('XDG_STATE_HOME', str(Path.home() / '.local/state'))) / 'quiet-porch'
+    result = state / ('guarded-' + intent + '.json')
+    try:
+        return perform(args)
+    except Exception as error:
+        if mode == 'play' and result.exists() and json.loads(result.read_text()).get('status') == 'pending':
+            receipt(result, str(error) if isinstance(error, Refusal) else 'playback_error')
+        raise
+
+
+if __name__ == '__main__':
+    os.umask(0o077)
+    try:
+        print(run(sys.argv[1:]))
+    except Refusal as error:
+        print(str(error))
+        sys.exit(0)  # Fixed refusal protocol, not a transport exception.
+    except Exception:
+        print('helper_error')
+        sys.exit(1)
