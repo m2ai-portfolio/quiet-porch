@@ -22,6 +22,9 @@ export const boundedYardLimits = {
   // Used only when a run explicitly enables new-frame recovery; shared by every cause.
   recoveries: 1,
   recoveryDrainMs: 1000,
+  // Follow-up frames are requested this far behind now (was 2000). Ring answers 416 for
+  // timestamps closer than about 1 to 1.5 s to real time (friction log, 2026-10-21).
+  followUpLookbackMs: 1500,
 } as const;
 
 export interface YardRunDependencies {
@@ -261,6 +264,7 @@ export async function runBoundedYard(deps: YardRunDependencies, delivery: YardRu
     scope: deps.scope,
     config: deps.config,
     parallelCritique: true,
+    followUpLookbackMs: boundedYardLimits.followUpLookbackMs,
     settleModelFailures: unavailableRecovery,
     // Private run journal only, so an uncertain or disagreeing frame can be explained.
     recordJudgementReasons: true,

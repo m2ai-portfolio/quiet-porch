@@ -147,7 +147,11 @@ export async function judgeFreshFrame(
     }
   };
   const start = (signal?: AbortSignal) => [
-    timed('perception', [imageBlock(jpeg), { text: perceptionPrompt(evidenceId) }], signal),
+    timed(
+      'perception',
+      [imageBlock(jpeg), { text: perceptionPrompt(evidenceId, { brief: true }) }],
+      signal,
+    ),
     timed('critique', [imageBlock(jpeg), { text: critique }], signal),
   ];
   let pResult: Awaited<ReturnType<typeof timed>>, cResult: Awaited<ReturnType<typeof timed>>;

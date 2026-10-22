@@ -30,7 +30,13 @@ it('synthesizes exactly one labelled wake and serves the still stamped at reques
   });
   const first = source.readWakes(7);
   expect(first.wakes).toEqual([
-    { ...scope, id: 'replay-ring-door-person', eventTs: 49_500, source: 'ring_event' },
+    {
+      ...scope,
+      id: 'replay-ring-door-person',
+      eventTs: 49_500,
+      subType: 'human',
+      source: 'ring_event',
+    },
   ]);
   expect(source.readWakes(7).wakes).toEqual([]);
   const frame = await source.download(scope.accountId, scope.deviceId, 48_000, { keepImage: true });

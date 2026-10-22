@@ -16,6 +16,9 @@ import {
 } from './monitor-diagnostics.ts';
 export function createAttendedObserver(deps: {
   parallelCritique?: boolean;
+  // How far behind "now" each follow-up frame is requested. Ring answers 416 for timestamps
+  // closer than about 1 to 1.5 s to real time (friction log, 2026-10-21). Default keeps 2000.
+  followUpLookbackMs?: number;
   // Settle both judgements before reporting a failure, typing a provider 503 as
   // ModelUnavailableBreak. Off by default: ongoing monitoring keeps Promise.all.
   settleModelFailures?: boolean;
@@ -34,6 +37,7 @@ export function createAttendedObserver(deps: {
   now?: () => number;
 }) {
   const now = deps.now ?? Date.now;
+  const lookback = deps.followUpLookbackMs ?? 2000;
   let blocked = false,
     busy = false,
     attempts = 0,
@@ -45,7 +49,7 @@ export function createAttendedObserver(deps: {
       busy = true;
       attempts++;
       lastPoll = now();
-      const requested = lastPoll - 2000;
+      const requested = lastPoll - lookback;
       const poll = attempts;
       const pollStarted = lastPoll;
       let stage = 'configuration',
@@ -101,9 +105,14 @@ export function createAttendedObserver(deps: {
           now() - ts >= 6000 ||
           ts <= lastCapture
         ) {
-          deps.audit({
+          record({
             event: 'followup_rejected',
             reason: check.ok ? 'missing_stale_or_repeated' : check.reason,
+            http_status: image.status,
+            step: image.step,
+            ...(image.error_code ? { error_code: image.error_code } : {}),
+            ...(image.request_id ? { request_id: image.request_id } : {}),
+            ...(ts !== undefined ? { capture_ts: ts, age_ms: now() - ts } : {}),
           });
           return;
         }

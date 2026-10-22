@@ -16,6 +16,7 @@ function rig(initialCooldown = 0) {
   };
   const reserve = vi.fn();
   const factory = vi.fn(() => outputs);
+  const audit = vi.fn();
   const monitor = createYardMonitor({
     scope,
     authorized: () => allowed,
@@ -23,7 +24,7 @@ function rig(initialCooldown = 0) {
     killed: () => killed,
     ready: async () => true,
     outputs: factory,
-    audit: () => {},
+    audit,
     reserve,
     initialCooldown,
     now: () => time,
@@ -34,6 +35,7 @@ function rig(initialCooldown = 0) {
     outputs,
     reserve,
     factory,
+    audit,
     at: (s: number) => {
       time = 100000 + s * 1000;
     },
@@ -192,4 +194,35 @@ it('persistent reservation failure prevents arming or outputs', async () => {
   await r.feed(0);
   expect(r.monitor.status().running).toBe(false);
   expect(r.factory).not.toHaveBeenCalled();
+});
+it('an other_motion wake is refused before any encounter opens; a human wake still opens one', async () => {
+  const r = rig();
+  await r.monitor.wake({
+    ...scope,
+    id: 'w-animal',
+    eventTs: 100000,
+    subType: 'other_motion',
+    source: 'ring_event',
+  });
+  expect(r.factory).not.toHaveBeenCalled();
+  expect(r.audit).toHaveBeenCalledWith({
+    event: 'motion_wake_rejected',
+    reason: 'other_motion_no_fresh_frame',
+    event_id: 'w-animal',
+  });
+  await r.monitor.wake({
+    ...scope,
+    id: 'w-person',
+    eventTs: 100000,
+    subType: 'human',
+    source: 'ring_event',
+  });
+  expect(r.audit).toHaveBeenCalledWith({
+    event: 'motion_wake',
+    event_id: 'w-person',
+    event_ts: 100000,
+    sub_type: 'human',
+    hint_only: true,
+  });
+  expect(r.factory).toHaveBeenCalledTimes(1);
 });

@@ -98,11 +98,23 @@ export function createYardMonitor(deps: {
           deps.audit({ event: 'motion_wake_rejected' });
           return;
         }
+        // other_motion webhooks arrive about 11 s late and their clip is downloadable only
+        // 21 to 26 s after the event, after the clip has ended (friction log F-02, F-05).
+        // "now - 2 s" can never hit it, so the 6 s attended path cannot use these wakes.
+        if (ev.subType === 'other_motion') {
+          deps.audit({
+            event: 'motion_wake_rejected',
+            reason: 'other_motion_no_fresh_frame',
+            event_id: ev.id,
+          });
+          return;
+        }
         lastWake = ev.id;
         deps.audit({
           event: 'motion_wake',
           event_id: ev.id,
           event_ts: ev.eventTs,
+          sub_type: ev.subType,
           hint_only: true,
         });
         await openEncounter();

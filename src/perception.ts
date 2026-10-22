@@ -34,7 +34,7 @@ export interface Perception {
 
 export type Validated<T> = { ok: true; value: T } | { ok: false; reason: string };
 
-export function perceptionPrompt(evidenceId: string): string {
+export function perceptionPrompt(evidenceId: string, opts: { brief?: boolean } = {}): string {
   return [
     'You are the perception step of a home security system. Describe only what is visible in',
     'this single doorbell/yard camera frame. Do not guess identities.',
@@ -43,10 +43,17 @@ export function perceptionPrompt(evidenceId: string): string {
     ` "subjects": [{"class": one of ${SUBJECT_CLASSES.map((c) => `"${c}"`).join('|')},`,
     '               "confidence": number 0..1}],',
     ' "person_present": boolean,',
-    ' "activity": short string,',
+    opts.brief ? ' "activity": string of at most 6 words,' : ' "activity": short string,',
     ' "night_ir": boolean (true if the frame is a grayscale infrared night image)}',
-    'You may add voice_slots with place and clothing strings describing only neutral position and clothing.',
-    'Never include identities or protected characteristics; omit a slot when uncertain.',
+    ...(opts.brief
+      ? [
+          'Output the JSON on one line with no other text, no markdown and no extra keys.',
+          'Never include identities or protected characteristics.',
+        ]
+      : [
+          'You may add voice_slots with place and clothing strings describing only neutral position and clothing.',
+          'Never include identities or protected characteristics; omit a slot when uncertain.',
+        ]),
     'List every person, animal and vehicle you can see, one entry each. Use an empty subjects',
     'array if there is nothing. Use "other" for an animal not in the list.',
   ].join('\n');

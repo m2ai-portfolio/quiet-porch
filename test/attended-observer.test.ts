@@ -20,7 +20,7 @@ const cfg: PipelineConfig = {
     nuisanceSpecies: [],
   },
 };
-function rig() {
+function rig(extra: { followUpLookbackMs?: number } = {}) {
   let now = 100000,
     allowed = true,
     empty = false;
@@ -52,6 +52,7 @@ function rig() {
   });
   const audit = vi.fn();
   const observer = createAttendedObserver({
+    ...extra,
     scope,
     config: () => cfg,
     download,
@@ -187,4 +188,36 @@ it('never polls an inactive session', async () => {
   r.revoke();
   expect(await r.observer.poll()).toBeUndefined();
   expect(r.download).not.toHaveBeenCalled();
+});
+it('requests follow-up frames 2 s back by default and at the configured lookback when given', async () => {
+  const dflt = rig();
+  await dflt.observer.poll();
+  expect(dflt.download).toHaveBeenCalledWith('owner', 'cam', 98000, { keepImage: true });
+  const short = rig({ followUpLookbackMs: 1500 });
+  await short.observer.poll();
+  expect(short.download).toHaveBeenCalledWith('owner', 'cam', 98500, { keepImage: true });
+});
+it('a 416 follow-up is rejected with Ring status, error code, request id and poll context', async () => {
+  const r = rig({ followUpLookbackMs: 1500 });
+  r.alter(() => ({ status: 416, step: 1, error_code: 'MEDIA_NOT_FOUND', request_id: 'rid-1' }));
+  expect(await r.observer.poll()).toBeUndefined();
+  expect(r.converse).not.toHaveBeenCalled();
+  expect(r.audit).toHaveBeenCalledWith(
+    expect.objectContaining({
+      event: 'followup_rejected',
+      reason: 'http_416',
+      http_status: 416,
+      step: 1,
+      error_code: 'MEDIA_NOT_FOUND',
+      request_id: 'rid-1',
+      poll: 1,
+      requested_ts: 98500,
+    }),
+  );
+  // The observer keeps polling after a 416: the next poll is admitted once 2 s have passed.
+  r.setTime(102000);
+  r.alter((image) => image);
+  expect(r.download).toHaveBeenCalledTimes(1);
+  await r.observer.poll();
+  expect(r.download).toHaveBeenCalledTimes(2);
 });

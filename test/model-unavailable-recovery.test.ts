@@ -650,13 +650,19 @@ it('the critique states the office setting only when the in-memory label is pres
   expect(prompts[0]).not.toMatch(/indoors|never a reason/);
 });
 
-// Frames arrive ~2.5 s old in this rig; 3.6 s more in flight makes the result 6.1 s old,
-// while the previous accepted evidence is still under six seconds old.
-const STALE_LAG = 3600;
+// A perception lag that lands the result just past the 6 s limit. The frame is already
+// followUpLookbackMs old when requested, so the lag compensates for the configured lookback
+// (3600 at the original 2000 ms, 4100 at 1500 ms).
+const STALE_LAG = 5600 - boundedYardLimits.followUpLookbackMs;
+// The rig's model calls are instant. A stale result is recoverable only while the previous
+// evidence is under 6 s old (attended-test.ts, evidence_lost); live, the previous call's own
+// 2 to 3 s guarantees that. Give the call before the stale one a short realistic duration so
+// the rig keeps that window at any lookback (at 1500 ms it is otherwise exactly zero).
+const PRIOR_CALL_MS = 600;
 const staleAt =
   (call: number) =>
   (model: 'perception' | 'critique', n: number): number =>
-    model === 'perception' && n === call ? STALE_LAG : 0;
+    model !== 'perception' ? 0 : n === call ? STALE_LAG : n === call - 1 ? PRIOR_CALL_MS : 0;
 // A silent drop leaves no failure row; only a stale result that spends the recovery does.
 const staleBreaks = (r: ReturnType<typeof rig>) =>
   r.events('observation_failed').filter((x) => x.stage === 'result_freshness');

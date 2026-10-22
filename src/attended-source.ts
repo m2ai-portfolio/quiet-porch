@@ -58,6 +58,8 @@ export function readAttendedEvidence(db: DatabaseSync, after: number, scope: Tes
 export interface MotionWake extends TestScope {
   id: string;
   eventTs: number;
+  // Ring sub_type (human, other_motion, ...). A hint like the rest of the wake, never evidence.
+  subType?: string;
   source: 'ring_event';
 }
 export function readMotionWakeups(db: DatabaseSync, after: number, scope: TestScope, now: number) {
@@ -84,7 +86,13 @@ export function readMotionWakeups(db: DatabaseSync, after: number, scope: TestSc
       now - r.received_at >= 15000
     )
       continue;
-    wakes.push({ ...scope, id: event.eventId, eventTs: event.eventTs, source: 'ring_event' });
+    wakes.push({
+      ...scope,
+      id: event.eventId,
+      eventTs: event.eventTs,
+      subType: event.subType,
+      source: 'ring_event',
+    });
   }
   return { after: rows.at(-1)?.id ?? after, wakes };
 }

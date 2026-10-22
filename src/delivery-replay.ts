@@ -38,7 +38,15 @@ export function createReplaySource(deps: {
       deps.audit({ event: 'replay_wake_synthesized', fixture: deps.fixture, event_ts: eventTs });
       return {
         after: cursor,
-        wakes: [{ ...deps.scope, id: `replay-${deps.fixture}`, eventTs, source: 'ring_event' }],
+        wakes: [
+          {
+            ...deps.scope,
+            id: `replay-${deps.fixture}`,
+            eventTs,
+            subType: 'human',
+            source: 'ring_event',
+          },
+        ],
       };
     },
     async download(
