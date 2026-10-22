@@ -1,0 +1,14 @@
+# gitleaks configuration for quiet-porch. The pre-push hook and the GitHub to GitLab mirror read
+# this file from the pushed commit, so it must be committed to count.
+[extend]
+useDefault = true
+
+# test/judgement-reasons.test.ts proves that sanitizeReason() redacts token-like strings before a
+# model's reasons reach a Telegram alert. One expectation uses a synthetic AKIA-form string as the
+# input; it is not a credential (no such key exists). Scoped to that file and that pattern only.
+[[allowlists]]
+description = "synthetic AWS-key-shaped fixture in the reason-redaction test"
+condition = "AND"
+paths = ['''^test/judgement-reasons\.test\.ts$''']
+regexTarget = "match"
+regexes = ['''AKIA[0-9A-Z]{16}''']
